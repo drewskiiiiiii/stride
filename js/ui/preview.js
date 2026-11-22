@@ -4,7 +4,8 @@ import { esc, icon } from './dom.js';
 import { fmtDist, fmtDuration, fmtMinutes, fmtPaceRange } from '../core/units.js';
 import { fmtDate, fmtLongDate } from '../core/dates.js';
 import { ZONE_INFO } from '../engine/vdot.js';
-import { workoutLine, typeColor } from './format.js';
+import { workoutLine, typeColor, speedUnit, showSpeeds } from './format.js';
+import { stepSpeed, fmtSpeedRange } from '../engine/treadmill.js';
 
 export function phaseStrip(plan) {
   return `<div class="phase-strip">${plan.phases.map((p) => `<i class="ph-${p.phase}" style="flex:${p.to - p.from + 1}" title="${esc(p.label)}"></i>`).join('')}</div>
@@ -20,7 +21,8 @@ export function volumeBars(plan, currentWeek = 0) {
 export function pacesTable(plan) {
   if (!plan.paces) return `<div class="notice">${icon('info', 'sm')}<div>No recent race result yet, so workouts use <b>effort (RPE)</b> and breathing cues instead of invented paces. Complete the scheduled time trial — or add a result in Profile — to unlock pace zones.</div></div>`;
   const rows = ['recovery', 'easy', 'long', 'steady', 'marathon', 'tempo', 'threshold', 'interval', 'rep'].filter((z) => plan.paces[z]);
-  return `<table class="pace-table">${rows.map((z) => `<tr><td><span class="row"><span class="dot" data-z="${z === 'marathon' ? 'steady' : z}"></span>${esc(ZONE_INFO[z].name)}</span><div class="tiny muted">${esc(ZONE_INFO[z].effort)}</div></td><td>${fmtPaceRange(plan.paces[z])}</td></tr>`).join('')}</table>
+  const sp = showSpeeds(plan) || plan.inputs?.prefs?.treadmill;
+  return `<table class="pace-table">${rows.map((z) => `<tr><td><span class="row"><span class="dot" data-z="${z === 'marathon' ? 'steady' : z}"></span>${esc(ZONE_INFO[z].name)}</span><div class="tiny muted">${esc(ZONE_INFO[z].effort)}</div></td><td>${fmtPaceRange(plan.paces[z])}${sp ? `<div class="tiny muted" style="font-weight:600">${fmtSpeedRange(stepSpeed({ kind: 'work', zone: z, targetPace: plan.paces[z] }, { unit: speedUnit() }))}</div>` : ''}</td></tr>`).join('')}</table>
   ${plan.paceConfidence === 'low' ? '<p class="tiny muted">Estimated from your easy pace only — harder zones use effort until you log a time trial.</p>' : ''}`;
 }
 

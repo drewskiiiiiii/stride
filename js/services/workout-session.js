@@ -3,6 +3,7 @@
 // clock never depends on setInterval accuracy and the state can be restored after a crash.
 
 import { flattenSteps, zonePace } from '../engine/workout-utils.js';
+import { stepSpeed, distanceFromLog, avgMpsFromLog, mpsToSpeed, speedToMps, roundSpeed } from '../engine/treadmill.js';
 
 const EARTH_R = 6371000;
 export function haversine(a, b) {
@@ -17,7 +18,7 @@ export function haversine(a, b) {
  * opts: { mode: 'gps'|'timer'|'treadmill', paces, assumedEasy, now }
  */
 export function createSession(workout, opts) {
-  const { mode = 'gps', paces, assumedEasy = 420, now = Date.now() } = opts;
+  const { mode = 'gps', paces, assumedEasy = 420, now = Date.now(), speedUnit = 'mph' } = opts;
   const flat = flattenSteps(workout.steps && workout.steps.length ? workout.steps : [{ kind: 'steady', label: 'Run', measure: 'time', value: 1800, zone: 'easy' }]);
   const steps = flat.map((s) => {
     const targetPace = s.zone && paces && paces[s.zone] ? paces[s.zone] : null;
@@ -25,7 +26,8 @@ export function createSession(workout, opts) {
     const out = { ...s, targetPace, estPace };
     if (s.measure === 'distance') {
       out.estSec = Math.round((s.value / 1000) * estPace);
-      if (mode !== 'gps') { out.measure = 'time'; out.value = out.estSec; out.converted = s.value; }
+      // timer mode has no distance source; treadmill integrates the user-entered speeds instead
+      if (mode === 'timer') { out.measure = 'time'; out.value = out.estSec; out.converted = s.value; }
     }
     return out;
   });
@@ -35,12 +37,52 @@ export function createSession(workout, opts) {
   let wi = 0;
   steps.forEach((x) => { if (isMain(x)) { wi++; x.workIndex = wi; x.workTotal = workTotal; } });
   const totalEst = steps.reduce((a, s) => a + (s.measure === 'time' ? s.value : s.measure === 'distance' ? s.estSec : 45), 0);
-  return {
+  const sess = {
     v: 1, id: `act-${now}`, workoutId: workout.id || null, planId: workout.planId || null, title: workout.title, type: workout.type,
     mode, steps, totalEst, status: 'ready', createdAt: now, startedAt: null, pausedMs: 0, pauseStart: null,
     stepIndex: 0, stepStartElapsed: 0, stepStartDist: 0, distance: 0, lastPoint: null, route: [], laps: [],
     fired: {}, halfwayFired: false, lastSaved: now, gpsStatus: mode === 'gps' ? 'searching' : 'off', paceSamples: [],
+    tm: mode === 'treadmill' ? { unit: speedUnit, speedLog: [], selected: null, changes: [], stepChangeIdx: -1 } : null,
   };
+  if (mode === 'treadmill') sess.steps.forEach((x) => { x.speed = stepSpeed(x, { paces, assumedEasy, unit: speedUnit }); });
+  return sess;
+}
+
+// ---------------------------------------------------------------- treadmill
+/**
+ * Record the speed the user has set on the treadmill. Never called automatically —
+ * the app only recommends; the user confirms every change.
+ */
+export function setTreadmillSpeed(s, now, speed) {
+  if (!s.tm) return [];
+  const v = roundSpeed(Math.max(0, speed));
+  const at = s.startedAt == null ? 0 : elapsedMs(s, now);
+  const entry = { at, mps: speedToMps(v, s.tm.unit), speed: v };
+  const last = s.tm.speedLog[s.tm.speedLog.length - 1];
+  if (last && Math.abs(last.at - at) < 1) s.tm.speedLog[s.tm.speedLog.length - 1] = entry; else s.tm.speedLog.push(entry);
+  s.tm.selected = v;
+  s.tm.changes.push({ at, speed: v, step: s.stepIndex });
+  s.tm.stepChangeIdx = s.stepIndex;
+  s.tm.lastChangeWall = now;
+  syncTreadmill(s, now);
+  return [{ type: 'speedset', speed: v, step: currentStep(s) }];
+}
+
+function syncTreadmill(s, now) {
+  if (s.tm && s.startedAt != null) s.distance = distanceFromLog(s.tm.speedLog, elapsedMs(s, now));
+}
+
+/** Seconds remaining in the current step at the selected treadmill speed (distance steps) or by clock. */
+export function stepSecondsLeft(s, now) {
+  const st = currentStep(s);
+  if (!st) return null;
+  if (st.measure === 'time') return st.value - stepElapsedMs(s, now) / 1000;
+  if (st.measure === 'distance') {
+    const mps = s.tm ? speedToMps(s.tm.selected || 0, s.tm.unit) : null;
+    if (!mps) return null;
+    return (st.value - stepDistance(s)) / mps;
+  }
+  return null;
 }
 
 export const elapsedMs = (s, now) => (s.startedAt == null ? 0 : (s.pauseStart ?? (s.status === 'finished' ? s.finishedAt : now)) - s.startedAt - s.pausedMs);
@@ -79,15 +121,19 @@ function closeLap(s, now, { skipped = false, exactMs = null, partial = false } =
   const st = currentStep(s);
   if (!st) return;
   const durMs = exactMs ?? stepElapsedMs(s, now);
+  if (s.tm) s.distance = distanceFromLog(s.tm.speedLog, s.stepStartElapsed + durMs);
   const dist = stepDistance(s);
+  const tmAvg = s.tm && durMs > 0 ? roundSpeed(mpsToSpeed(avgMpsFromLog(s.tm.speedLog, s.stepStartElapsed, s.stepStartElapsed + durMs), s.tm.unit)) : null;
   s.laps.push({
     idx: st.idx, label: st.label, kind: st.kind, zone: st.zone, targetPace: st.targetPace, measure: st.measure, value: st.value,
     rep: st.rep, reps: st.reps, duration: Math.round(durMs / 1000), distance: Math.round(dist),
     avgPace: dist > 30 ? (durMs / 1000) / (dist / 1000) : null, skipped, partial, startElapsed: s.stepStartElapsed,
+    ...(s.tm ? { treadmill: true, tmAvgSpeed: tmAvg, targetSpeed: st.speed || null, speedUnit: s.tm.unit } : {}),
   });
 }
 
 function advance(s, now, { skipped = false, exactMs = null } = {}) {
+  syncTreadmill(s, now);
   closeLap(s, now, { skipped, exactMs });
   s.stepStartElapsed = exactMs != null ? s.stepStartElapsed + exactMs : elapsedMs(s, now);
   s.stepStartDist = s.distance;
@@ -99,6 +145,7 @@ function advance(s, now, { skipped = false, exactMs = null } = {}) {
 /** Advance automatically when time/distance steps complete. Handles catch-up after backgrounding. */
 export function tick(s, now) {
   if (s.status !== 'running') return [];
+  syncTreadmill(s, now);
   const events = [];
   let guard = 0;
   while (s.status === 'running' && guard++ < 500) {
@@ -117,6 +164,18 @@ export function tick(s, now) {
     const key = String(s.stepIndex);
     const fired = (s.fired[key] = s.fired[key] || []);
     const next = s.steps[s.stepIndex + 1];
+    if (s.tm) {
+      const left = stepSecondsLeft(s, now);
+      const dur = st.measure === 'time' ? st.value : st.estSec || 0;
+      if (next?.speed && left != null && left <= 30.5 && left > 3 && dur >= 60 && !fired.includes('tm30')
+        && (next.kind === 'work' || Math.abs((next.speed.target || 0) - (s.tm.selected || 0)) >= 0.2)) {
+        fired.push('tm30'); events.push({ type: 'tmPre', next, seconds: Math.round(left) });
+      }
+      const se2 = stepElapsedMs(s, now) / 1000;
+      if (st.speed && s.tm.selected != null && se2 >= 20 && s.tm.stepChangeIdx !== s.stepIndex && !fired.includes('tmRem')) {
+        if (s.tm.selected < st.speed.low - 0.15 || s.tm.selected > st.speed.high + 0.15) { fired.push('tmRem'); events.push({ type: 'tmReminder', step: st, selected: s.tm.selected }); }
+      }
+    }
     if (st.measure === 'time') {
       const rem = st.value - se / 1000;
       if (rem <= 10.5 && rem > 0 && st.value >= 25 && !fired.includes('10s')) { fired.push('10s'); events.push({ type: 'countdown', seconds: 10, next, step: st }); }
@@ -164,6 +223,7 @@ export function completeManual(s, now) {
 
 export function finish(s, now, { lapClosed = false } = {}) {
   if (s.status === 'finished') return [];
+  syncTreadmill(s, now);
   if (!lapClosed && currentStep(s)) closeLap(s, now, { partial: true });
   if (s.pauseStart != null) { s.pausedMs += now - s.pauseStart; s.pauseStart = null; }
   s.status = 'finished';
@@ -230,8 +290,14 @@ export function toActivity(s, { date, rpe = null, notes = '', manualDistance = n
   const duration = Math.round(elapsedMs(s, s.finishedAt || Date.now()) / 1000);
   let distance = Math.round(s.distance);
   const laps = s.laps.map((l) => ({ ...l }));
-  if (s.mode !== 'gps') {
-    // timer/treadmill: estimate distance from target paces unless the user entered it
+  const tmMeasured = s.tm && s.tm.speedLog.length && s.tm.speedLog.some((x) => x.mps > 0);
+  if (tmMeasured && manualDistance) {
+    const f = manualDistance / Math.max(1, distance);
+    distance = Math.round(manualDistance);
+    laps.forEach((l) => { l.distance = Math.round(l.distance * f); l.avgPace = l.distance > 30 ? l.duration / (l.distance / 1000) : null; });
+  }
+  if (s.mode !== 'gps' && !tmMeasured) {
+    // timer (or treadmill without entered speeds): estimate distance from target paces unless the user entered it
     if (manualDistance) distance = Math.round(manualDistance);
     else distance = Math.round(laps.reduce((a, l) => a + (l.kind === 'exercise' || l.kind === 'rest' ? 0 : (l.duration / (s.steps[l.idx]?.estPace || 420)) * 1000), 0));
     const lapEst = laps.map((l) => (l.kind === 'exercise' || l.kind === 'rest' ? 0 : (l.duration / (s.steps[l.idx]?.estPace || 420)) * 1000));
@@ -249,6 +315,7 @@ export function toActivity(s, { date, rpe = null, notes = '', manualDistance = n
     startedAt: s.startedAt, finishedAt: s.finishedAt, duration, distance,
     avgPace: distance > 50 ? duration / (distance / 1000) : null, laps, route: s.route, mode: s.mode,
     completionPct, fastestLap: fastest ? { label: fastest.label, rep: fastest.rep, avgPace: fastest.avgPace } : null,
-    rpe, notes, source: 'live', distanceEstimated: s.mode !== 'gps' && !manualDistance,
+    rpe, notes, source: s.mode === 'treadmill' ? 'treadmill' : 'live', distanceEstimated: s.mode !== 'gps' && !manualDistance && !tmMeasured,
+    ...(s.tm ? { treadmill: { unit: s.tm.unit, speedLog: s.tm.speedLog, changes: s.tm.changes.length } } : {}),
   };
 }

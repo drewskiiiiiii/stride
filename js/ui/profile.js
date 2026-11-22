@@ -57,11 +57,23 @@ export function renderProfile() {
       ${segRow('hr', [['bpm', 'BPM'], ['pct', '% max']], p.hr, 'Heart rate')}
     </div>
 
+    <div class="section-title"><h2>Treadmill</h2></div>
+    <div class="list">
+      ${segRow('speedUnit', [['auto', 'Auto'], ['mph', 'mph'], ['kmh', 'km/h']], p.speedUnit, 'Speed unit')}
+      ${segRow('showSpeeds', [['auto', 'Auto'], ['on', 'Always'], ['off', 'Never']], p.showSpeeds, 'Show treadmill speeds on workouts')}
+      ${segRow('tmDisplay', [['speed', 'Speed'], ['pace', 'Pace']], p.tmDisplay, 'Live treadmill display')}
+      ${tog('tmSpeakTarget', p.tmSpeakTarget, 'Speak target speed', '“Increase the treadmill to 7.2 miles per hour for this tempo interval.”')}
+      ${tog('tmReminders', p.tmReminders, 'Speed-change reminders', '“Your next interval begins in 30 seconds. Target speed is 7.5.”')}
+      ${tog('tmCompare', p.tmCompare, 'Compare my speed with the target', '“You’re currently running at 6.0. Your target is 6.8.”')}
+      ${tog('tmPeriodic', p.tmPeriodic, 'Periodic speed & distance updates', `Every ${p.updateEvery || 5} min: speed, distance covered and distance to go`)}
+      <div class="setting"><div class="grow s small muted">Speeds round to 0.1 increments. Stride never changes your treadmill — you adjust the belt and confirm the speed in the app.</div></div>
+    </div>
+
     <div class="section-title"><h2>Workout audio & feedback</h2><button class="link-btn" data-action="test-audio">${icon('volume', 'xs')} Test</button></div>
     <div class="list">
       ${segRow('cueLevel', [['minimal', 'Minimal'], ['standard', 'Standard'], ['detailed', 'Detailed']], p.cueLevel, 'Announcements')}
       <div class="setting" style="padding-top:0"><div class="grow s small muted">${{ minimal: 'Only phase changes and workout complete.', standard: 'Phase changes, 10-second warnings, distance remaining, halfway and pace alerts.', detailed: 'Everything in Standard plus regular time, distance and pace updates.' }[p.cueLevel]}</div></div>
-      ${p.cueLevel === 'detailed' ? `<div class="setting"><div class="grow"><div class="t">Update every</div></div><select class="input" data-pref-select="updateEvery" style="max-width:140px">${opts([1, 2, 5, 10].map((v) => ({ value: v, label: `${v} min` })), p.updateEvery || 5)}</select></div>` : ''}
+      ${p.cueLevel === 'detailed' || p.tmPeriodic ? `<div class="setting"><div class="grow"><div class="t">Update every</div></div><select class="input" data-pref-select="updateEvery" style="max-width:140px">${opts([1, 2, 5, 10].map((v) => ({ value: v, label: `${v} min` })), p.updateEvery || 5)}</select></div>` : ''}
       ${segRow('startCountdown', [['3', '3 s'], ['10', '10 s']], String(p.startCountdown), 'Start countdown')}
       ${tog('distanceCues', p.distanceCues, 'Distance remaining', '“You have 200 metres remaining” on distance intervals')}
       ${tog('voice', p.voice, 'Voice coaching', audio.speechSupported ? 'Spoken cues for each phase and interval' : 'Not supported in this browser', !audio.speechSupported)}
@@ -97,7 +109,7 @@ export function renderProfile() {
         <dt>Installed as app</dt><dd>${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'Yes' : 'No'}</dd>
         <dt>GPS</dt><dd>${gps.supported ? (gps.secure ? 'Available' : 'Needs HTTPS') : 'Unavailable'}</dd>
         <dt>Storage</dt><dd data-di="storage">—</dd>
-        <dt>Version</dt><dd>2.0.0 · data v2</dd>
+        <dt>Version</dt><dd>2.1.0 · data v2</dd>
       </dl>
       ${!(matchMedia('(display-mode: standalone)').matches || navigator.standalone) ? `<div class="notice" style="margin-top:12px">${icon('download', 'sm')}<div><b>Install Stride:</b> on iPhone tap <b>Share → Add to Home Screen</b> in Safari. On Android tap <b>⋮ → Install app</b> in Chrome.${window.__installPrompt ? ' <button class="btn sm" data-action="install">Install now</button>' : ''}</div></div>` : ''}
     </div>

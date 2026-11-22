@@ -9,6 +9,7 @@ import * as WS from '../js/services/workout-session.js';
 import { analyzeMissed, summarizeChanges, safeDays } from '../js/engine/scheduler.js';
 import { analyzeTrends, effectivePaces, recommendFromCheckin, assessmentDue, evaluateWorkout, vdotFromThreshold, reduceWorkout } from '../js/engine/performance.js';
 import { validateBackup } from '../js/core/migrate.js';
+import { paceToSpeed, speedToPace, roundSpeed, stepSpeed, distanceFromLog, speedStatus, convertSpeed } from '../js/engine/treadmill.js';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => { try { fn(); pass++; console.log('  ✓', name); } catch (e) { fail++; console.log('  ✗', name, '\n     ', e.message); } };
@@ -357,6 +358,93 @@ t('backup validation detects duplicates and bad files', () => {
   ok(v.ok && v.duplicates.activities === 1 && v.duplicates.plans === 1 && v.warnings.some((w) => /older version/.test(w)));
   ok(!validateBackup({ hello: 1 }, state).ok);
   ok(!validateBackup({ app: 'stride-running-coach', schemaVersion: 99, stores: {} }, state).ok, 'newer version should fail');
+});
+
+console.log('Treadmill coaching');
+t('pace → speed: 6:00/mi = 10.0 mph, 5:00/km = 12.0 km/h', () => {
+  near(paceToSpeed(360 / 1.609344, 'mph'), 10, 0.001);
+  near(paceToSpeed(300, 'kmh'), 12, 0.001);
+  near(speedToPace(10, 'mph') * 1.609344, 360, 0.01);
+  near(speedToPace(12, 'kmh'), 300, 0.01);
+  near(convertSpeed(10, 'mph', 'kmh'), 16.09, 0.01);
+});
+t('speeds round to 0.1 increments', () => {
+  ok(roundSpeed(7.249) === 7.2 && roundSpeed(7.25) === 7.3 && roundSpeed(6.96) === 7.0);
+  const v = paceToSpeed(8.5 * 60 / 1.609344, 'mph'); ok(roundSpeed(v) === 7.1, String(roundSpeed(v)));
+});
+t('pace range → speed range (slow pace = low speed), target = midpoint', () => {
+  const r = stepSpeed({ kind: 'work', zone: 'tempo', targetPace: [300, 330] }, { unit: 'kmh' });
+  ok(r.low === 10.9 && r.high === 12.0 && r.target === 11.4, JSON.stringify(r));
+});
+t('every segment of a multi-target workout gets its own speed', () => {
+  const p = trainingPaces(45);
+  const s = WS.createSession(workout, { mode: 'treadmill', paces: p, now: 0, speedUnit: 'mph' });
+  const speeds = s.steps.map((x) => x.speed?.target);
+  ok(speeds.every((v) => v > 3 && v < 12.6), speeds.join());
+  ok(s.steps[0].speed.target < s.steps[1].speed.target && s.steps[2].speed.target < s.steps[1].speed.target, 'warmup < interval > recovery');
+  ok(s.steps[1].measure === 'distance', 'treadmill keeps distance steps');
+});
+t('walk & effort-only plans still get sensible speeds (flagged estimated)', () => {
+  ok(stepSpeed({ kind: 'walk', zone: 'walk', measure: 'time', value: 60 }, { unit: 'mph' }).target === 3.5);
+  ok(stepSpeed({ kind: 'steady', zone: 'easy' }, { paces: null, assumedEasy: 420, unit: 'kmh' }).estimated);
+  ok(stepSpeed({ kind: 'exercise', zone: null }, {}) === null);
+});
+t('distance integrates user-entered speeds, including a mid-workout change', () => {
+  const log = [{ at: 0, mps: 3 }, { at: 60000, mps: 4 }];
+  ok(distanceFromLog(log, 120000) === 420, String(distanceFromLog(log, 120000)));
+  const s = WS.createSession(workout, { mode: 'treadmill', paces: trainingPaces(45), now: 0, speedUnit: 'kmh' });
+  WS.setTreadmillSpeed(s, 0, 10.8); WS.start(s, 0);
+  WS.tick(s, 300_000); near(s.distance, 900, 1, '5 min @ 10.8 km/h');
+  WS.setTreadmillSpeed(s, 300_000, 7.2);
+  WS.tick(s, 600_000); near(s.distance, 1500, 1, '+5 min @ 7.2');
+  ok(s.tm.selected === 7.2 && s.tm.changes.length === 2);
+});
+t('distance-based intervals advance from treadmill distance; laps record actual vs target speed', () => {
+  const p = trainingPaces(45);
+  const s = WS.createSession(workout, { mode: 'treadmill', paces: p, now: 0, speedUnit: 'kmh' });
+  WS.setTreadmillSpeed(s, 0, s.steps[0].speed.target); WS.start(s, 0);
+  WS.tick(s, 600_001); ok(s.stepIndex === 1, 'warm-up time step');
+  WS.setTreadmillSpeed(s, 600_001, 16.0); // 4.444 m/s → 800 m in 180 s
+  WS.tick(s, 600_001 + 179_000); ok(s.stepIndex === 1, 'advanced too early');
+  WS.tick(s, 600_001 + 181_000); ok(s.stepIndex === 2, 'did not advance after 800 m');
+  const lap = s.laps[1];
+  ok(lap.treadmill && lap.tmAvgSpeed === 16 && lap.targetSpeed.target === s.steps[1].speed.target && Math.abs(lap.distance - 800) < 6, JSON.stringify(lap));
+});
+t('new interval never changes the selected speed (user must adjust)', () => {
+  const s = WS.createSession(workout, { mode: 'treadmill', paces: trainingPaces(45), now: 0 });
+  WS.setTreadmillSpeed(s, 0, 6.0); WS.start(s, 0); WS.tick(s, 601_000);
+  ok(s.stepIndex === 1 && s.tm.selected === 6.0);
+});
+t('30-second next-interval notice and off-target reminder fire once', () => {
+  const s = WS.createSession(workout, { mode: 'treadmill', paces: trainingPaces(45), now: 0 });
+  WS.setTreadmillSpeed(s, 0, 5.5); WS.start(s, 0);
+  const e1 = WS.tick(s, 571_000); ok(e1.some((e) => e.type === 'tmPre' && e.next.kind === 'work'), JSON.stringify(e1.map((e) => e.type)));
+  ok(!WS.tick(s, 575_000).some((e) => e.type === 'tmPre'), 'repeated');
+  WS.tick(s, 600_500); // now in interval at 5.5 (too slow)
+  const e2 = WS.tick(s, 621_000); ok(e2.some((e) => e.type === 'tmReminder'), 'no reminder');
+  ok(!WS.tick(s, 640_000).some((e) => e.type === 'tmReminder'), 'reminder repeated');
+});
+t('pause/resume keeps speed history and does not add distance while paused', () => {
+  const s = WS.createSession(workout, { mode: 'treadmill', paces: trainingPaces(45), now: 0, speedUnit: 'kmh' });
+  WS.setTreadmillSpeed(s, 0, 9); WS.start(s, 0); WS.tick(s, 120_000);
+  WS.pause(s, 120_000); WS.tick(s, 400_000); WS.resume(s, 400_000);
+  WS.setTreadmillSpeed(s, 400_000, 12); WS.tick(s, 460_000);
+  near(s.distance, 300 + 200, 1, 'distance across pause');
+  ok(s.tm.speedLog.length === 2 && s.tm.speedLog[1].at === 120_000, JSON.stringify(s.tm.speedLog));
+  const a = WS.toActivity(s, { date: TODAY }); WS.finish(s, 460_000);
+  ok(WS.toActivity(s, { date: TODAY }).treadmill.speedLog.length === 2);
+});
+t('speed status respects the prescribed range', () => {
+  const r = { low: 6.6, high: 7.0 };
+  ok(speedStatus(6.8, r) === 'on' && speedStatus(6.0, r) === 'slow' && speedStatus(7.3, r) === 'fast' && speedStatus(7.0, r) === 'on');
+});
+t('treadmill trends are analysed separately from outdoor GPS runs', () => {
+  const plan = { vdot: 45, paces: effectivePaces(45, {}), paceOffsets: {} };
+  const tp = plan.paces.threshold;
+  const out = [0, 1].map((i) => mkAct(i, 'threshold', tp, (tp[0] + tp[1]) / 2, 6));
+  const tm = [2, 3, 4].map((i) => ({ ...mkAct(i, 'threshold', tp, tp[0] * 0.96, 6), id: 'tm' + i, source: 'treadmill', laps: [{ kind: 'work', zone: 'threshold', targetPace: tp, avgPace: tp[0] * 0.96, duration: 1200, distance: 4000, treadmill: true }] }));
+  const r = analyzeTrends({ activities: [...out, ...tm], workouts: [], plan, today: '2026-12-30' });
+  ok(r.groups.threshold.source === 'treadmill' && r.suggestion && /treadmill/i.test(r.suggestion.explanation), JSON.stringify(r.groups.threshold));
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

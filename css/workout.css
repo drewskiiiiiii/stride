@@ -69,3 +69,13 @@
 .lap-table td.r, .lap-table th.r { text-align: right; }
 .route-svg { width: 100%; height: 200px; background: var(--surface-2); border-radius: 14px; }
 .route-svg path { fill: none; stroke: var(--accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+
+/* treadmill speed panel */
+.tm-panel { display: grid; grid-template-columns: 64px 1fr 64px; gap: 8px; align-items: stretch; margin-bottom: 8px; }
+.tm-step { height: 64px; border-radius: 18px; border: 0; background: rgba(255,255,255,0.1); color: #fff; font-size: 30px; font-weight: 700; }
+.tm-val { border: 0; border-radius: 18px; background: rgba(255,255,255,0.06); color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 6px; min-height: 64px; }
+.tm-val .v { font-size: 30px; font-weight: 800; line-height: 1; letter-spacing: -0.02em; }
+.tm-val .tl, .live-target .tl { color: #8c93a0; font-size: 10.5px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.1em; }
+.tm-actions { display: flex; gap: 8px; margin-bottom: 10px; }
+.tm-actions button { flex: 1; height: 44px; border-radius: 14px; border: 0; background: rgba(255,255,255,0.08); color: #fff; font-weight: 700; font-size: 14px; }
+.tm-actions button[data-tm="match"] { background: var(--zc, #c8ff2e); color: #0a0b0d; }

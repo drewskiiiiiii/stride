@@ -5,6 +5,26 @@ import { fmtDist, fmtDuration, fmtMinutes, fmtPace, fmtPaceRange, fmtRepDist, pa
 import { ZONE_INFO, hrRange, maxHrEstimate } from '../engine/vdot.js';
 import { TYPE_META, flattenSteps, zonePace } from '../engine/workout-utils.js';
 import { prefs } from '../core/storage.js';
+import { stepSpeed, fmtSpeedRange, speedLabel } from '../engine/treadmill.js';
+
+/** Treadmill speed unit: user choice, or follows the distance unit. */
+export function speedUnit() {
+  const p = prefs.get();
+  if (p.speedUnit === 'mph' || p.speedUnit === 'kmh') return p.speedUnit;
+  return p.distance === 'km' ? 'kmh' : 'mph';
+}
+/** Whether to show treadmill speeds alongside paces on workout segments. */
+export function showSpeeds(plan) {
+  const v = prefs.get().showSpeeds;
+  if (v === 'on') return true;
+  if (v === 'off') return false;
+  return !!plan?.inputs?.prefs?.treadmill;
+}
+export function stepSpeedText(step, plan) {
+  const r = stepSpeed(step, { paces: plan?.paces, assumedEasy: plan?.assumedEasy || 420, unit: speedUnit() });
+  if (!r) return '';
+  return `${r.estimated ? '≈ ' : ''}${fmtSpeedRange(r)}${r.incline >= 5 ? ` @ ${r.incline}% incline` : ''}${r.capped ? ' (treadmill max)' : ''}`;
+}
 
 export function zoneColorKey(zone) {
   const map = { walk: 'walk', recovery: 'recovery', easy: 'easy', long: 'long', steady: 'steady', marathon: 'steady', half: 'tempo', tempo: 'tempo', threshold: 'threshold', '10k': 'threshold', '5k': 'interval', interval: 'interval', rep: 'rep', hill: 'interval', stride: 'rep', fartlekOn: 'tempo', race: 'rep' };
@@ -33,6 +53,7 @@ export function stepTarget(step, plan, profile, { short = false } = {}) {
   if (byHr && hrText) { parts.push(hrText); if (pr && !short) parts.push(pr); }
   else if (pr) { parts.push(pr); if (hrText && !short && byHr) parts.push(hrText); }
   if (!pr && !(byHr && hrText)) parts.push(short ? `RPE ${info.rpe}` : `${info.effort || ''} · RPE ${info.rpe}`);
+  if (!short && showSpeeds(plan)) { const sp = stepSpeedText(step, plan); if (sp) parts.push(`Treadmill ${sp}`); }
   return parts.join(' · ');
 }
 

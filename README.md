@@ -18,6 +18,21 @@ A personal running coach that works fully offline after first load: onboarding a
 
 **Local testing:** `python3 -m http.server 8000` in this folder, then open `http://localhost:8000` (localhost counts as a secure context).
 
+## What's new in v2.1 — Treadmill coaching
+- **Speeds for every segment:** each segment's prescribed pace is converted to a treadmill speed in mph or km/h, rounded to 0.1. When a pace range is prescribed, you get a speed range, with the target at its midpoint. Speeds show on every segment in workout details (toggle Pace / + Treadmill) and in the training-zone table. Hill repeats suggest a 6 % incline.
+- **Treadmill mode in live workouts:**
+  - **Speed control:** the current target speed and range, plus your own selected speed with −/+ 0.1 buttons, "Set to target", and typed entry.
+  - **Next segment:** the upcoming segment's speed is shown before it starts.
+  - **Your speed is never changed for you:** Stride never assumes the treadmill changed. Your selected speed stays the same across segments until you change it.
+  - **Distance:** calculated from the speeds you enter, so distance intervals end correctly. Pausing doesn't add distance and keeps your speed history.
+- **Voice Coach:** you can switch each of these on or off separately:
+  - Target speed at each transition ("Increase the treadmill to 7.2 miles per hour for this tempo interval").
+  - Reminders ("Your next interval begins in 30 seconds. Target speed is 7.5", plus one nudge if you're still off target 20 s into a segment).
+  - Comparisons after you change speed ("You're currently running at 6.0 miles per hour. Your target is 6.8").
+  - Periodic speed, distance and distance-to-go updates.
+- **Summary:** shows each segment's target speed against your time-weighted actual speed.
+- **Adaptive engine:** treadmill sessions are analysed only against other treadmill sessions, never mixed with GPS runs. Pace changes still need repeated evidence and your approval.
+
 ## What's new in v2
 - **Guided workouts.** A 10-second start countdown ("Workout starting in 10 seconds"). Live display of "Interval 3 of 5", remaining time or distance, target vs actual pace, average pace, speed and % complete.
   - Voice cues: "You have 200 metres remaining", "Recovery interval begins", halfway, and "Begin your cooldown".
@@ -56,10 +71,11 @@ js/engine/  PURE, DOM-free, deterministic — unit-tested in Node
   training-engine.js   periodised plan generator (phases, volume progression, recovery weeks, taper, scheduling)
   adjustments.js       move validation (recovery / long run / taper / mileage), regeneration merge, benchmarks
   scheduler.js         missed-workout analysis & options, change summaries (incl. race realism)
+  treadmill.js         pace↔speed (mph/km/h), 0.1 rounding, per-segment speed ranges, distance from speed log
   performance.js       workout evaluation, multi-session trends, per-zone pace offsets, assessments, recovery check-in
 js/services/ workout-session.js (timestamp-based timer state machine) · gps.js · audio-coach.js (speech, beeps, vibration, wake lock, notifications)
 js/ui/      onboarding · preview · today · plan · calendar · dragdrop · progress · profile · live (workout mode) · coach · actions · adjust · charts · insights · format · dom
-tests/run-tests.js   `node tests/run-tests.js` — 49 engine, scheduling, adaptive-coaching, timer and data tests
+tests/run-tests.js   `node tests/run-tests.js` — 61 engine, scheduling, adaptive-coaching, treadmill, timer and data tests
 ```
 
 ### How the plan engine works

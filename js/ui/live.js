@@ -8,7 +8,8 @@ import { fmtDist, fmtDuration, fmtPace, fmtPaceRange, toDisplayDist, distLabel, 
 import * as WS from '../services/workout-session.js';
 import { gps } from '../services/gps.js';
 import { audio, wake, notify } from '../services/audio-coach.js';
-import { zoneColorKey, stepTarget, typeLabel } from './format.js';
+import { zoneColorKey, stepTarget, typeLabel, speedUnit } from './format.js';
+import { fmtSpeed, fmtSpeedRange, speedLabel, speedWords, speedStatus, speedToPace, SPEED_LIMITS, roundSpeed } from '../engine/treadmill.js';
 import { ZONE_INFO } from '../engine/vdot.js';
 import { isRun } from '../engine/workout-utils.js';
 import { offerVdotUpdate } from './actions.js';
@@ -30,7 +31,66 @@ function persist(force = false) {
 
 function applyCuePrefs(s) {
   const p = prefs.get();
-  s.updateEverySec = p.cueLevel === 'detailed' && !s.supp ? (p.updateEvery || 5) * 60 : 0;
+  const periodic = s.mode === 'treadmill' ? p.tmPeriodic : p.cueLevel === 'detailed';
+  s.updateEverySec = periodic && !s.supp ? (p.updateEvery || 5) * 60 : 0;
+}
+
+// ---------------------------------------------------------------- treadmill helpers
+const TM = () => S && S.mode === 'treadmill' && S.tm;
+function setSpeed(v, { silent = false } = {}) {
+  if (!TM()) return;
+  const lim = SPEED_LIMITS[S.tm.unit];
+  v = Math.max(0, Math.min(lim.max + 2, roundSpeed(v)));
+  handle(WS.setTreadmillSpeed(S, now(), v));
+  if (!silent) S.tm.compareFor = null; // schedule a spoken comparison after the user settles
+  persist(true); update();
+}
+function speedPanel() {
+  return `<div class="tm-panel" data-u="tmpanel">
+    <button class="tm-step" data-tm="-">−</button>
+    <button class="tm-val" data-tm="edit"><span class="tl">Your treadmill speed</span><span class="v num" data-u="tmsel">—</span><span class="tl" data-u="tmunit">${speedLabel(S.tm.unit)}</span></button>
+    <button class="tm-step" data-tm="+">+</button>
+  </div>
+  <div class="tm-actions"><button data-tm="match" data-u="tmmatch">Set to target</button><button data-tm="view" data-u="tmview">${prefs.get().tmDisplay === 'pace' ? 'Show speed' : 'Show pace'}</button></div>`;
+}
+function bindSpeedPanel(scope) {
+  scope.querySelectorAll('[data-tm]').forEach((b) => b.onclick = () => {
+    const k = b.dataset.tm;
+    const cur = S.tm.selected ?? (WS.currentStep(S)?.speed?.target || 0);
+    if (k === '+') setSpeed(cur + 0.1);
+    if (k === '-') setSpeed(Math.max(0, cur - 0.1));
+    if (k === 'match') { const st = WS.currentStep(S); if (st?.speed) setSpeed(st.speed.target); }
+    if (k === 'view') { prefs.set({ tmDisplay: prefs.get().tmDisplay === 'pace' ? 'speed' : 'pace' }); b.textContent = prefs.get().tmDisplay === 'pace' ? 'Show speed' : 'Show pace'; update(); }
+    if (k === 'edit') {
+      const v = prompt(`Enter the speed shown on your treadmill (${speedLabel(S.tm.unit)})`, fmtSpeed(cur));
+      if (v != null && v.trim() !== '' && !isNaN(Number(v))) setSpeed(Number(v));
+    }
+  });
+}
+function speedSay(v) { return `${fmtSpeed(v)} ${speedWords(S.tm.unit)}`; }
+const stepNoun = (st) => ({ warmup: 'your warm-up', cooldown: 'your cool-down', recover: 'recovery', walk: 'this walk', steady: 'this run' }[st.kind] || (st.zone === 'tempo' || st.zone === 'threshold' ? 'this tempo interval' : st.zone === 'hill' ? 'this hill repeat' : 'this interval'));
+function tmInstruction(st, { first = false } = {}) {
+  if (!st?.speed) return '';
+  const tgt = st.speed.target, sel = S.tm.selected;
+  const incl = st.speed.incline >= 5 ? ` and set the incline to ${st.speed.incline} percent` : '';
+  if (first || sel == null) return st.kind === 'warmup' ? `Your warm-up pace is ${speedSay(tgt)}.` : `Target speed is ${speedSay(tgt)}${incl}.`;
+  if (tgt > sel + 0.05) return `Increase the treadmill to ${speedSay(tgt)} for ${stepNoun(st)}${incl}.`;
+  if (tgt < sel - 0.05) return `Reduce your speed to ${speedSay(tgt)} for ${stepNoun(st)}${incl}.`;
+  return `Hold ${speedSay(tgt)}${incl}.`;
+}
+function remainingWorkoutDistance(t) {
+  let d = 0;
+  const st = WS.currentStep(S);
+  if (!st) return 0;
+  const selMps = S.tm.selected ? (S.tm.selected * (S.tm.unit === 'mph' ? M_PER_MI : 1000)) / 3600 : 0;
+  if (st.measure === 'distance') d += Math.max(0, st.value - WS.stepDistance(S));
+  else if (st.measure === 'time') d += Math.max(0, st.value - WS.stepElapsedMs(S, t) / 1000) * (selMps || 0);
+  for (let i = S.stepIndex + 1; i < S.steps.length; i++) {
+    const x = S.steps[i];
+    if (x.measure === 'distance') d += x.value;
+    else if (x.measure === 'time' && x.speed) d += x.value * (x.speed.target * (S.tm.unit === 'mph' ? M_PER_MI : 1000)) / 3600;
+  }
+  return d;
 }
 let lastTap = 0;
 const debounced = (fn) => () => { const t = now(); if (t - lastTap < 650) return; lastTap = t; fn(); };
@@ -50,8 +110,9 @@ export function startLive(workoutId, exitCb) {
   const plan = store.state.plan;
   const supp = w.type === 'strength' || w.type === 'mobility';
   const outdoors = plan?.inputs?.prefs?.outdoors !== false;
-  const mode = supp ? 'timer' : gps.supported && gps.secure && outdoors ? 'gps' : 'timer';
-  S = WS.createSession(w, { mode, paces: plan?.paces, assumedEasy: plan?.assumedEasy || 420, now: now() });
+  const tmPref = plan?.inputs?.prefs?.treadmill && !outdoors;
+  const mode = supp ? 'timer' : tmPref ? 'treadmill' : gps.supported && gps.secure && outdoors ? 'gps' : 'timer';
+  S = WS.createSession(w, { mode, paces: plan?.paces, assumedEasy: plan?.assumedEasy || 420, now: now(), speedUnit: speedUnit() });
   S.date = todayISO();
   S.supp = supp;
   applyCuePrefs(S);
@@ -143,6 +204,7 @@ function startLoop() {
     const ev = WS.tick(S, now());
     if (ev.length) handle(ev);
     paceAlert();
+    tmCompare();
     update();
     persist();
   }, 250);
@@ -177,17 +239,25 @@ function renderReady() {
         <button data-mode="treadmill" class="${S.mode === 'treadmill' ? 'sel' : ''}">Treadmill</button>
         <button data-mode="timer" class="${S.mode === 'timer' ? 'sel' : ''}">Timer only</button></div></div>`}
       <div data-gps-note>${modeNote()}</div>
+      ${S.mode === 'treadmill' ? `<div class="card" style="background:rgba(255,255,255,.06);border:0;margin-top:12px">
+        <div class="small" style="color:#c3c8d1">First segment: <b style="color:#fff">${esc(S.steps[0]?.label || '')}</b> · target <b style="color:#fff">${esc(fmtSpeedRange(S.steps[0]?.speed))}</b>${S.steps[0]?.speed?.estimated ? ' (estimated — no pace data yet)' : ''}</div>
+        <div class="tm-panel" style="margin-top:10px"><button class="tm-step" data-rs="-">−</button><div class="tm-val"><span class="tl">Starting treadmill speed</span><span class="v num" data-rs-val>${fmtSpeed(S.steps[0]?.speed?.target ?? 0)}</span><span class="tl">${speedLabel(S.tm.unit)}</span></div><button class="tm-step" data-rs="+">+</button></div>
+        <div class="tiny" style="color:#8c93a0;margin-top:8px">Stride never changes your treadmill. Set the belt yourself, then keep the speed here matched so distance stays accurate.</div>
+      </div>` : ''}
       ${isIOS ? `<div class="notice" style="margin-top:10px">${icon('info', 'sm')}<div>On iPhone, keep the screen on and the app open for voice cues and GPS. If the screen locks, your time stays accurate and the workout catches up when you return.</div></div>` : `<div class="notice" style="margin-top:10px">${icon('info', 'sm')}<div>For best results keep the screen on (${wake.supported ? 'Stride will request this automatically' : 'set your screen timeout longer'}). Timing is always recalculated from timestamps, so it stays correct even if the browser is backgrounded.</div></div>`}
     </div>
     <button class="btn primary lg block" data-l="go" style="min-height:76px;font-size:20px;border-radius:24px">${icon('play')} Start</button>`;
   root.querySelector('[data-l="close"]').onclick = () => { sessionStore.clear(); unmount(); onExit && onExit(); };
   root.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => {
     const w2 = store.workout(S.workoutId);
-    S = WS.createSession(w2, { mode: b.dataset.mode, paces: plan?.paces, assumedEasy: plan?.assumedEasy || 420, now: now() });
+    S = WS.createSession(w2, { mode: b.dataset.mode, paces: plan?.paces, assumedEasy: plan?.assumedEasy || 420, now: now(), speedUnit: speedUnit() });
     S.date = todayISO(); S.supp = w2.type === 'strength' || w2.type === 'mobility'; applyCuePrefs(S); persist(true); renderReady();
   });
   if (S.mode === 'gps') { startGps(); }
+  let startSpeed = S.steps[0]?.speed?.target ?? 0;
+  root.querySelectorAll('[data-rs]').forEach((b) => b.onclick = () => { startSpeed = Math.max(0, roundSpeed(startSpeed + (b.dataset.rs === '+' ? 0.1 : -0.1))); root.querySelector('[data-rs-val]').textContent = fmtSpeed(startSpeed); });
   root.querySelector('[data-l="go"]').onclick = () => {
+    if (TM()) WS.setTreadmillSpeed(S, now(), startSpeed);
     audio.unlock();
     wake.acquire();
     const ov = document.createElement('div'); ov.className = 'countdown-overlay'; root.appendChild(ov);
@@ -211,7 +281,7 @@ function modeNote() {
     if (!gps.secure) return `<div class="notice">${icon('alert', 'sm')}<div>GPS needs the app to be opened over HTTPS. Use Timer mode or open the installed app.</div></div>`;
     return `<div class="row small" style="color:#c3c8d1">${icon('pin', 'sm')} <span data-gps-pill>${gpsLabel()}</span></div>`;
   }
-  if (S.mode === 'treadmill') return `<div class="small" style="color:#c3c8d1">Distance intervals are converted to time at your target pace. You can enter the treadmill distance at the end.</div>`;
+  if (S.mode === 'treadmill') return `<div class="small" style="color:#c3c8d1">Every segment shows a recommended treadmill speed. Distance is calculated from the speeds you enter, so distance intervals end exactly when you have covered them.</div>`;
   return S.supp ? '' : `<div class="small" style="color:#c3c8d1">No GPS. Distance steps become timed steps at your target pace; distance is estimated.</div>`;
 }
 function gpsLabel() {
@@ -239,6 +309,7 @@ function renderRunning() {
       <div class="live-target" data-u="target"></div>
       <div class="live-cue" data-u="cue"></div>
     </div>
+    ${TM() ? speedPanel() : ''}
     <div class="live-stats" ${S.supp ? 'style="grid-template-columns:1fr 1fr"' : ''}>
       <div><div class="v" data-u="elapsed">0:00</div><div class="l">Elapsed</div></div>
       ${S.supp ? `<div><div class="v" data-u="setsdone">0</div><div class="l">Sets done</div></div>` : `<div><div class="v" data-u="dist">0.00</div><div class="l">${distLabel()}</div></div>
@@ -257,6 +328,7 @@ function renderRunning() {
       <button class="end" data-l="end">${icon('stop', 'sm')} End</button>
     </div>
     <div class="live-warn" data-u="warn"></div>`;
+  if (TM()) bindSpeedPanel(root);
   root.querySelector('[data-l="prev"]').onclick = debounced(() => { handle(WS.prev(S, now())); persist(true); update(); });
   root.querySelector('[data-l="next"]').onclick = debounced(() => { handle(WS.next(S, now())); persist(true); update(); });
   root.querySelector('[data-l="main"]').onclick = debounced(() => {
@@ -319,7 +391,11 @@ function update() {
   if (sub) {
     const avgP = WS.averagePace(S, t);
     const spd = avgP ? (3600 / avgP) * (distLabel() === 'mi' ? 1000 / M_PER_MI : 1) : null;
-    sub.innerHTML = S.mode === 'gps' ? `<span>Avg ${avgP ? fmtPace(avgP) + paceLabel() : '—'}</span><span>Speed ${spd ? spd.toFixed(1) : '—'} ${distLabel() === 'mi' ? 'mph' : 'km/h'}</span><span>${Math.round(WS.progress(S, t) * 100)}% done</span>` : `<span>${Math.round(WS.progress(S, t) * 100)}% of workout done</span><span>Step ${S.stepIndex + 1}/${S.steps.length}</span>`;
+    if (TM()) {
+      const left = remainingWorkoutDistance(t);
+      const stLeft = st?.measure === 'distance' ? Math.max(0, st.value - WS.stepDistance(S)) : null;
+      sub.innerHTML = `<span>${stLeft != null ? `${toDisplayDist(stLeft).toFixed(2)} ${distLabel()} left in step` : `Avg ${avgP ? fmtPace(avgP) + paceLabel() : '—'}`}</span><span>≈ ${toDisplayDist(left).toFixed(2)} ${distLabel()} to go</span><span>${Math.round(WS.progress(S, t) * 100)}%</span>`;
+    } else sub.innerHTML = S.mode === 'gps' ? `<span>Avg ${avgP ? fmtPace(avgP) + paceLabel() : '—'}</span><span>Speed ${spd ? spd.toFixed(1) : '—'} ${distLabel() === 'mi' ? 'mph' : 'km/h'}</span><span>${Math.round(WS.progress(S, t) * 100)}% done</span>` : `<span>${Math.round(WS.progress(S, t) * 100)}% of workout done</span><span>Step ${S.stepIndex + 1}/${S.steps.length}</span>`;
   }
   const kindName = { warmup: 'Warm-up', cooldown: 'Cool-down', work: 'Work', recover: 'Recovery', steady: 'Run', walk: 'Walk', exercise: 'Exercise', rest: 'Rest' }[st?.kind] || '';
   $('kind').innerHTML = `<span class="dot" style="background:var(--zc)"></span>${esc(S.status === 'paused' ? 'Paused' : kindName)}`;
@@ -330,7 +406,23 @@ function update() {
   // target & current pace
   const cur = WS.currentPace(S, t);
   const targetEl = $('target');
-  if (st && st.zone && !S.supp) {
+  if (TM() && st) {
+    const rec = st.speed;
+    const sel = S.tm.selected;
+    const showPace = prefs.get().tmDisplay === 'pace';
+    const stat = speedStatus(sel, rec);
+    targetEl.hidden = !rec;
+    if (rec) {
+      targetEl.className = `live-target ${stat === 'slow' ? 'slow' : stat === 'fast' ? 'fast' : stat === 'on' ? 'on' : ''}`;
+      const tgtTxt = showPace ? fmtPaceRange([speedToPace(rec.high, rec.unit), speedToPace(rec.low, rec.unit)]) : `${fmtSpeed(rec.target)} ${speedLabel(rec.unit)}`;
+      const rangeTxt = !showPace && rec.high - rec.low >= 0.15 ? `<span class="tl">${fmtSpeed(rec.low)}–${fmtSpeed(rec.high)}</span>` : '';
+      targetEl.innerHTML = `<span class="tl">Target</span> ${esc(tgtTxt)} ${rangeTxt}${rec.incline >= 5 ? ` <span class="tl">${rec.incline}% incline</span>` : ''}${stat ? ` <span class="tl">${stat === 'slow' ? '▲ Speed up' : stat === 'fast' ? '▼ Slow down' : '✓ On target'}</span>` : ''}`;
+    }
+    $('tmsel').textContent = sel == null ? '—' : showPace ? fmtPace(speedToPace(sel, S.tm.unit)) : fmtSpeed(sel);
+    $('tmunit').textContent = showPace ? paceLabel() : speedLabel(S.tm.unit);
+    const mb = $('tmmatch');
+    if (mb) { const show = rec && sel != null && Math.abs(sel - rec.target) >= 0.05; mb.hidden = !show; if (show) mb.textContent = `Set to target ${fmtSpeed(rec.target)}`; }
+  } else if (st && st.zone && !S.supp) {
     const tgt = st.targetPace ? fmtPaceRange(st.targetPace) : null;
     const hrTxt = profile?.inputs?.prefs?.intensityBy === 'hr' ? stepTarget(st, plan, profile, { short: true }) : null;
     let cls = '';
@@ -343,13 +435,16 @@ function update() {
   $('elapsed').textContent = fmtDuration(WS.elapsedMs(S, t) / 1000);
   if (S.supp) $('setsdone').textContent = S.laps.filter((l) => l.kind === 'exercise' && !l.skipped).length;
   else {
-    $('dist').textContent = S.mode === 'gps' ? toDisplayDist(S.distance).toFixed(2) : '—';
+    $('dist').textContent = S.mode === 'gps' || TM() ? toDisplayDist(S.distance).toFixed(2) : '—';
     const avg = WS.averagePace(S, t);
-    $('pace').textContent = S.mode === 'gps' ? (cur ? fmtPace(cur) : avg ? fmtPace(avg) : '—') : '—';
-    $('pacel').textContent = cur ? `Pace ${paceLabel()}` : `Avg ${paceLabel()}`;
+    if (TM()) { $('pace').textContent = S.tm.selected ? fmtPace(speedToPace(S.tm.selected, S.tm.unit)) : '—'; $('pacel').textContent = `Pace ${paceLabel()}`; }
+    else {
+      $('pace').textContent = S.mode === 'gps' ? (cur ? fmtPace(cur) : avg ? fmtPace(avg) : '—') : '—';
+      $('pacel').textContent = cur ? `Pace ${paceLabel()}` : `Avg ${paceLabel()}`;
+    }
   }
   const nx = S.steps[S.stepIndex + 1];
-  $('next').innerHTML = nx ? `<span class="dot" style="background:var(--z-${zoneColorKey(nx.zone)})"></span><span class="grow">Next: <b>${esc(nx.label)}</b>${nx.reps ? ` (${nx.rep}/${nx.reps})` : ''}</span><span class="num">${esc(nx.measure === 'time' ? fmtDuration(nx.value) : nx.measure === 'distance' ? (nx.value < 3000 ? Math.round(nx.value) + 'm' : fmtDist(nx.value)) : nx.detail?.split('·').pop() || '')}</span>` : `<span class="grow">Last step — finish strong</span>`;
+  $('next').innerHTML = nx ? `<span class="dot" style="background:var(--z-${zoneColorKey(nx.zone)})"></span><span class="grow">Next: <b>${esc(nx.label)}</b>${nx.reps ? ` (${nx.rep}/${nx.reps})` : ''}${TM() && nx.speed ? ` · <b style="color:var(--zc)">${fmtSpeed(nx.speed.target)} ${speedLabel(nx.speed.unit)}</b>` : ''}</span><span class="num">${esc(nx.measure === 'time' ? fmtDuration(nx.value) : nx.measure === 'distance' ? (nx.value < 3000 ? Math.round(nx.value) + 'm' : fmtDist(nx.value)) : nx.detail?.split('·').pop() || '')}</span>` : `<span class="grow">Last step — finish strong</span>`;
   const main = root.querySelector('[data-l="main"]');
   const manual = st?.measure === 'manual' && S.status === 'running';
   main.className = `main-btn ${S.status === 'paused' ? 'paused' : ''}`;
@@ -392,15 +487,25 @@ function handle(events, { quietCatchUp = false } = {}) {
   const hidden = document.visibilityState === 'hidden';
   const steps = events.filter((e) => e.type === 'step');
   for (const e of events) {
-    if (e.type === 'start') { audio.beep({ freq: 990, dur: 0.35 }); audio.vibrate([300]); audio.say(stepSpeech(e.step)); }
+    if (e.type === 'start') { audio.beep({ freq: 990, dur: 0.35 }); audio.vibrate([300]); audio.say(TM() ? `${stepSpeech(e.step).split('.')[0]}. ${p.tmSpeakTarget ? tmInstruction(e.step, { first: true }) : ''}` : stepSpeech(e.step)); }
     if (e.type === 'step' && e === steps[steps.length - 1]) {
       // Only announce the latest step if several were skipped while backgrounded
       audio.beep({ freq: 990, dur: 0.3 }); audio.vibrate([200, 80, 200]);
-      audio.say((quietCatchUp && steps.length > 1 ? 'Catching up. ' : '') + stepSpeech(e.step, e.prev));
+      const base = stepSpeech(e.step, e.prev);
+      const speech = TM() ? `${base.replace(/Increase your pace\.\s*/, '').replace(/Target \d.*?per (mile|kilometre)\./, '').trim()} ${p.tmSpeakTarget ? tmInstruction(e.step) : ''}` : base;
+      audio.say((quietCatchUp && steps.length > 1 ? 'Catching up. ' : '') + speech);
       if (hidden && p.stepNotifications) notify.show(e.step.label, stepSpeech(e.step, e.prev));
     }
     const minimal = p.cueLevel === 'minimal';
-    if (e.type === 'countdown' && p.countdown && !minimal && !quietCatchUp) {
+    if (e.type === 'tmPre' && p.tmReminders && !minimal && !quietCatchUp && e.next?.speed) {
+      const n = e.next;
+      audio.say(n.zone === 'stride' ? `Strides begin in ${e.seconds} seconds. Target speed is about ${speedSay(n.speed.target)}.` : n.kind === 'work' ? `Your next interval begins in ${e.seconds} seconds. Target speed is ${speedSay(n.speed.target)}.` : `In ${e.seconds} seconds, ${n.label.toLowerCase()} at ${speedSay(n.speed.target)}.`);
+    }
+    if (e.type === 'tmReminder' && p.tmReminders && !minimal && !quietCatchUp) {
+      audio.say(`You're at ${speedSay(e.selected)}. ${e.selected < e.step.speed.low ? 'Increase' : 'Reduce'} to ${fmtSpeed(e.step.speed.target)} for ${stepNoun(e.step)}.`);
+    }
+    const tmPreFired = TM() && (S.fired[String(S.stepIndex)] || []).includes('tm30');
+    if (e.type === 'countdown' && p.countdown && !minimal && !quietCatchUp && !tmPreFired) {
       const k = e.next?.kind;
       audio.say(k === 'work' ? 'Your interval begins in 10 seconds.' : k === 'recover' ? 'Recovery in 10 seconds.' : k === 'cooldown' ? 'Cooldown in 10 seconds.' : e.next ? `${e.next.label} in 10 seconds.` : 'Finishing in 10 seconds.');
     }
@@ -408,7 +513,10 @@ function handle(events, { quietCatchUp = false } = {}) {
     if (e.type === 'halfway' && p.halfway && !minimal) audio.say('Halfway through your workout. Keep it up.');
     if (e.type === 'stephalf' && p.halfway && !minimal && !quietCatchUp) audio.say(`Halfway through this ${e.step.kind === 'work' ? 'effort' : 'section'}.`);
     if (e.type === 'distwarn' && p.distanceCues && !minimal && !quietCatchUp) { audio.say(`You have ${e.meters} metres remaining.`); if (e.meters === 100) audio.vibrate([80]); }
-    if (e.type === 'update' && !quietCatchUp) {
+    if (e.type === 'update' && !quietCatchUp && TM()) {
+      const t = now();
+      audio.say(`Speed ${speedSay(S.tm.selected || 0)}. Distance ${toDisplayDist(S.distance).toFixed(1)} ${distLabel() === 'mi' ? 'miles' : 'kilometres'}. About ${toDisplayDist(remainingWorkoutDistance(t)).toFixed(1)} to go.`);
+    } else if (e.type === 'update' && !quietCatchUp) {
       const t = now(); const el = Math.round(WS.elapsedMs(S, t) / 60000); const avg = WS.averagePace(S, t);
       audio.say(`Time ${el} minutes.${S.mode === 'gps' && S.distance > 100 ? ` Distance ${toDisplayDist(S.distance).toFixed(1)} ${distLabel() === 'mi' ? 'miles' : 'kilometres'}. Average pace ${speakClock(avg)}.` : ''}`);
     }
@@ -418,6 +526,17 @@ function handle(events, { quietCatchUp = false } = {}) {
       setTimeout(mountSummary, 400);
     }
   }
+}
+
+function tmCompare() {
+  if (!TM() || S.status !== 'running' || !S.tm.lastChangeWall) return;
+  if (S.tm.compareFor === S.tm.lastChangeWall || now() - S.tm.lastChangeWall < 2500) return;
+  S.tm.compareFor = S.tm.lastChangeWall;
+  const st = WS.currentStep(S); const p = prefs.get();
+  if (!st?.speed || !p.tmCompare || p.cueLevel === 'minimal') return;
+  const stat = speedStatus(S.tm.selected, st.speed);
+  if (stat === 'on') audio.say(`${speedSay(S.tm.selected)}. Right on target.`);
+  else if (stat) audio.say(`You're currently running at ${speedSay(S.tm.selected)}. Your target is ${fmtSpeed(st.speed.target)}.`);
 }
 
 function speakClock(secPerKm) {
@@ -457,9 +576,12 @@ function mountSummary() {
       <div class="stat"><div class="v">${act.completionPct}<small>%</small></div><div class="l">Completed</div></div>
     </div>
     ${act.fastestLap ? `<div class="notice accent" style="margin-top:12px">${icon('bolt', 'sm')}<div>Fastest interval: <b>${esc(act.fastestLap.label)}${act.fastestLap.rep ? ' #' + act.fastestLap.rep : ''}</b> at <b>${fmtPace(act.fastestLap.avgPace, { withUnit: true })}</b></div></div>` : ''}
-    ${S.mode !== 'gps' && !S.supp ? `<div class="card" style="margin-top:12px"><label class="field" style="margin:0"><span class="lbl">Actual distance <span class="muted small">(from treadmill or watch — optional)</span></span><div class="unit-suffix"><input class="input" data-s="dist" inputmode="decimal" placeholder="${act.distance ? toDisplayDist(act.distance).toFixed(2) : ''}"><span>${distLabel()}</span></div></label></div>` : ''}
+    ${S.mode !== 'gps' && !S.supp ? `<div class="card" style="margin-top:12px"><label class="field" style="margin:0"><span class="lbl">Actual distance <span class="muted small">(${TM() ? 'from the treadmill display — optional, corrects the calculated distance' : 'from treadmill or watch — optional'})</span></span><div class="unit-suffix"><input class="input" data-s="dist" inputmode="decimal" placeholder="${act.distance ? toDisplayDist(act.distance).toFixed(2) : ''}"><span>${distLabel()}</span></div></label></div>` : ''}
     ${act.route.length > 2 ? `<div class="section-title"><h2>Route</h2></div>${routeSvg(act.route)}` : ''}
-    ${workLaps.length && !S.supp ? `<div class="section-title"><h2>Target vs actual</h2></div><div class="card" style="padding:8px 10px"><table class="lap-table"><tr><th>Step</th><th class="r">Time</th><th class="r">Dist</th><th class="r">Pace</th><th class="r">Target</th></tr>
+    ${TM() && act.laps.length ? `<div class="section-title"><h2>Target vs your speed</h2></div><div class="card" style="padding:8px 10px"><table class="lap-table"><tr><th>Segment</th><th class="r">Time</th><th class="r">Target</th><th class="r">You</th><th class="r">Dist</th></tr>
+      ${act.laps.filter((l) => l.targetSpeed).map((l) => { const stt = speedStatus(l.tmAvgSpeed, l.targetSpeed); return `<tr><td>${esc(l.label)}${l.rep ? ` ${l.rep}` : ''}</td><td class="r">${fmtDuration(l.duration)}</td><td class="r muted">${esc(fmtSpeedRange(l.targetSpeed))}</td><td class="r" style="font-weight:700;color:${stt === 'on' ? 'var(--ok)' : stt === 'slow' ? 'var(--warn)' : stt === 'fast' ? 'var(--z-easy)' : 'inherit'}">${fmtSpeed(l.tmAvgSpeed)}</td><td class="r">${fmtDist(l.distance, { withUnit: false })}</td></tr>`; }).join('')}
+    </table><p class="tiny muted">Distance is calculated from the speeds you entered (${S.tm.changes.length} change${S.tm.changes.length === 1 ? '' : 's'}). Treadmill results are tracked separately from outdoor GPS runs.</p></div>` : ''}
+    ${workLaps.length && !S.supp && !TM() ? `<div class="section-title"><h2>Target vs actual</h2></div><div class="card" style="padding:8px 10px"><table class="lap-table"><tr><th>Step</th><th class="r">Time</th><th class="r">Dist</th><th class="r">Pace</th><th class="r">Target</th></tr>
       ${workLaps.map((l) => { const tp = l.targetPace; const ok = tp && l.avgPace ? (l.avgPace <= tp[1] * 1.03 && l.avgPace >= tp[0] * 0.97 ? 'var(--ok)' : l.avgPace > tp[1] * 1.03 ? 'var(--warn)' : 'var(--z-easy)') : 'inherit';
         return `<tr><td>${esc(l.label)}${l.rep ? ` ${l.rep}` : ''}${l.skipped ? ' <span class="muted tiny">skipped</span>' : l.partial ? ' <span class="muted tiny">ended early</span>' : ''}</td><td class="r">${fmtDuration(l.duration)}</td><td class="r">${l.distance ? fmtDist(l.distance, { withUnit: false }) : '—'}</td><td class="r" style="color:${ok};font-weight:700">${l.avgPace ? fmtPace(l.avgPace) : '—'}</td><td class="r muted">${tp ? fmtPaceRange(tp) : esc(ZONE_INFO[l.zone]?.rpe ? 'RPE ' + ZONE_INFO[l.zone].rpe : '—')}</td></tr>`; }).join('')}
     </table>${act.distanceEstimated ? '<p class="tiny muted">Distances estimated from target paces (no GPS).</p>' : ''}</div>` : ''}

@@ -80,22 +80,30 @@ export function evaluateWorkout(activity, workout) {
 export function analyzeTrends({ activities = [], workouts = [], plan = null, today, decisions = {} }) {
   const acts = activities.filter((a) => a.date <= today).slice().sort((a, b) => (a.date < b.date ? 1 : -1));
   const groups = {};
+  // Treadmill speeds (user-entered) and GPS-measured outdoor runs are analysed separately.
+  const sourceOf = (a) => (a.source === 'treadmill' || a.mode === 'treadmill' || (a.laps || []).some((l) => l.treadmill) ? 'treadmill' : 'outdoor');
   for (const g of Object.keys(PACE_GROUPS)) {
-    const sessions = [];
+    const bySource = { outdoor: [], treadmill: [] };
     for (const a of acts) {
       if (a.distanceEstimated) continue;
+      const src = sourceOf(a);
+      const sessions = bySource[src];
+      if (sessions.length >= 6) continue;
       const laps = (a.laps || []).filter((l) => ZONE_GROUP[l.zone] === g && QUALITY_KINDS.includes(l.kind) && l.targetPace && l.avgPace && l.duration >= (g === 'rep' ? 30 : 90) && !l.estimated);
       if (!laps.length) continue;
-      const tot = laps.reduce((s, l) => s + l.duration, 0);
-      const avgPace = laps.reduce((s, l) => s + l.avgPace * l.duration, 0) / tot;
+      const tot = laps.reduce((s2, l) => s2 + l.duration, 0);
+      const avgPace = laps.reduce((s2, l) => s2 + l.avgPace * l.duration, 0) / tot;
       const fast = laps[0].targetPace[0], slow = laps[0].targetPace[1];
       const mid = (fast + slow) / 2;
       const dev = (avgPace - mid) / mid;
       const verdict = avgPace < fast * 0.98 ? 'fast' : avgPace > slow * 1.03 ? 'slow' : 'on';
       sessions.push({ id: a.id, date: a.date, avgPace, dev, verdict, rpe: a.rpe || null, outlier: dev < -0.08 && !['timetrial', 'race', 'assessment'].includes(a.type), title: a.title });
-      if (sessions.length >= 6) break;
     }
-    groups[g] = analyzeGroup(g, sessions);
+    const out = { ...analyzeGroup(g, bySource.outdoor), source: 'outdoor' };
+    const tm = { ...analyzeGroup(g, bySource.treadmill), source: 'treadmill' };
+    const actionable = (r) => r.status === 'faster' || r.status === 'slower';
+    groups[g] = actionable(out) ? out : actionable(tm) ? tm : out.status !== 'insufficient' ? out : tm;
+    groups[g].other = groups[g] === out ? tm.status : out.status;
   }
   const trends = describeTrends({ acts, workouts, today, groups });
   const suggestion = buildSuggestion({ groups, plan, decisions, acts });
@@ -153,8 +161,9 @@ function describeTrends({ acts, workouts, today, groups }) {
   const partial = recentPlanned.map((w) => acts.find((a) => a.id === w.activityId)).filter((a) => a && a.completionPct != null && a.completionPct < 80);
   if (partial.length >= 2) out.push({ kind: 'down', title: 'Some sessions cut short', body: `${partial.length} recent workouts ended before the prescribed work was done. Workouts may be too long or too hard right now.` });
   for (const [g, r] of Object.entries(groups)) {
-    if (r.status === 'faster') out.push({ kind: 'up', title: `${PACE_GROUPS[g].label}: consistently faster`, body: `${r.fastN} of your last ${r.n} sessions beat the target range${r.avgRpe ? ` at an average effort of ${r.avgRpe.toFixed(1)}/10` : ''}.` });
-    if (r.status === 'slower') out.push({ kind: 'down', title: `${PACE_GROUPS[g].label}: below target`, body: `${r.slowN} of your last ${r.n} sessions were slower than prescribed${r.avgRpe ? ` with effort averaging ${r.avgRpe.toFixed(1)}/10` : ''}.` });
+    const tag = r.source === 'treadmill' ? ' (treadmill)' : '';
+    if (r.status === 'faster') out.push({ kind: 'up', title: `${PACE_GROUPS[g].label}${tag}: consistently faster`, body: `${r.fastN} of your last ${r.n} sessions beat the target range${r.avgRpe ? ` at an average effort of ${r.avgRpe.toFixed(1)}/10` : ''}.` });
+    if (r.status === 'slower') out.push({ kind: 'down', title: `${PACE_GROUPS[g].label}${tag}: below target`, body: `${r.slowN} of your last ${r.n} sessions were slower than prescribed${r.avgRpe ? ` with effort averaging ${r.avgRpe.toFixed(1)}/10` : ''}.` });
   }
   return out;
 }
@@ -166,7 +175,7 @@ function buildSuggestion({ groups, plan, decisions, acts }) {
   const changing = Object.entries(groups).filter(([, r]) => r.status === 'faster' || r.status === 'slower');
   if (!changing.length) return null;
   // skip if the user already decided on this exact evidence
-  const key = changing.map(([g, r]) => `${g}:${r.status}:${r.latestIds.join(',')}`).join('|');
+  const key = changing.map(([g, r]) => `${g}:${r.source}:${r.status}:${r.latestIds.join(',')}`).join('|');
   if (decisions[key]) return null;
   const qualityFaster = ['threshold', 'interval', 'rep'].filter((g) => groups[g].status === 'faster');
   const qualitySlower = ['threshold', 'interval', 'rep'].filter((g) => groups[g].status === 'slower');
@@ -191,14 +200,16 @@ function buildSuggestion({ groups, plan, decisions, acts }) {
       const change = Math.round(r.delta * mid);
       if (!change) continue;
       newOffsets[g] = Math.max(-25, Math.min(25, (offsets[g] || 0) + change));
+      const where = r.source === 'treadmill' ? ' on the treadmill' : '';
       parts.push(r.status === 'faster'
-        ? `Your last ${r.n} ${GROUP_WORKOUT_NAME[g]} were consistently faster than prescribed${r.avgRpe ? ` and your reported effort stayed moderate (avg ${r.avgRpe.toFixed(1)}/10)` : ''}. Your ${PACE_GROUPS[g].label.toLowerCase()} pace has been adjusted slightly faster.`
-        : `Your last ${r.n} ${GROUP_WORKOUT_NAME[g]} were slower than prescribed${r.avgRpe ? ` while effort averaged ${r.avgRpe.toFixed(1)}/10` : ''}. Easing ${PACE_GROUPS[g].label.toLowerCase()} pace slightly keeps these sessions in the right training zone.`);
+        ? `Your last ${r.n} ${GROUP_WORKOUT_NAME[g]}${where} were consistently faster than prescribed${r.avgRpe ? ` and your reported effort stayed moderate (avg ${r.avgRpe.toFixed(1)}/10)` : ''}. Your ${PACE_GROUPS[g].label.toLowerCase()} pace has been adjusted slightly faster.`
+        : `Your last ${r.n} ${GROUP_WORKOUT_NAME[g]}${where} were slower than prescribed${r.avgRpe ? ` while effort averaged ${r.avgRpe.toFixed(1)}/10` : ''}. Easing ${PACE_GROUPS[g].label.toLowerCase()} pace slightly keeps these sessions in the right training zone.`);
     }
     if (!parts.length) return null;
     explanation = parts.join(' ');
   }
-  const outlierNote = Object.values(groups).some((r) => r.outliers) ? ' One unusually fast session was ignored (possibly GPS error or a downhill route) so it could not skew the result.' : '';
+  const tmNote = changing.some(([, r]) => r.source === 'treadmill') ? ' Treadmill sessions are judged only against other treadmill sessions, using the speeds you entered — never mixed with GPS runs outdoors.' : '';
+  const outlierNote = tmNote + (Object.values(groups).some((r) => r.outliers) ? ' One unusually fast session was ignored (possibly GPS error or a downhill route) so it could not skew the result.' : '');
   const oldPaces = plan.paces;
   const nextPaces = type === 'vdot' ? effectivePaces(newVdot, {}) : effectivePaces(plan.vdot, newOffsets);
   const changedZones = Object.keys(nextPaces).filter((z) => oldPaces?.[z] && Math.abs(oldPaces[z][0] - nextPaces[z][0]) >= 1);

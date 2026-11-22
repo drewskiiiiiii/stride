@@ -9,7 +9,8 @@ import { effectiveStatus, validateMove, moveWorkout } from '../engine/adjustment
 import { estimateWorkout, isRun, TYPE_META } from '../engine/workout-utils.js';
 import { assessmentWorkout, easyRun } from '../engine/workouts.js';
 import { vdotFromRace } from '../engine/vdot.js';
-import { renderSteps, structureBar, workoutLine, typeColor, typeLabel, mainTarget, statusLabel } from './format.js';
+import { renderSteps, structureBar, workoutLine, typeColor, typeLabel, mainTarget, statusLabel, showSpeeds, speedUnit } from './format.js';
+import { prefs } from '../core/storage.js';
 import { showSummary, openMissed, showEvaluation } from './coach.js';
 
 const today = () => todayISO();
@@ -45,7 +46,7 @@ export function openWorkout(id) {
     <p style="color:var(--text-2);margin:14px 0">${esc(w.purpose || '')}</p>
     ${act ? `<div class="card flat" style="margin-bottom:14px"><div class="row between"><b>Your result</b><button class="link-btn" data-view-activity="${act.id}">Details</button></div>
       <div class="metrics" style="margin:10px 0 0"><div class="metric sm"><div class="v">${fmtDist(act.distance)}</div><div class="l">Distance</div></div><div class="metric sm"><div class="v">${fmtDuration(act.duration)}</div><div class="l">Time</div></div><div class="metric sm"><div class="v">${act.avgPace ? fmtPace(act.avgPace) : '—'}</div><div class="l">Avg pace</div></div>${act.rpe ? `<div class="metric sm"><div class="v">${act.rpe}</div><div class="l">RPE</div></div>` : ''}</div></div>` : ''}
-    ${w.steps?.length ? `<div class="upper muted" style="margin:6px 0 8px">Workout structure</div>${renderSteps(w.steps, plan, profile)}` : ''}
+    ${w.steps?.length ? `<div class="row between" style="margin:6px 0 8px"><div class="upper muted">Workout structure</div>${isRun(w) ? `<div style="width:220px"><div class="seg"><button data-speedview="off" class="${showSpeeds(plan) ? '' : 'sel'}">Pace</button><button data-speedview="on" class="${showSpeeds(plan) ? 'sel' : ''}">+ Treadmill ${speedUnit() === 'mph' ? 'mph' : 'km/h'}</button></div></div>` : ''}</div>${renderSteps(w.steps, plan, profile)}` : ''}
     ${w.tips?.length ? `<div class="upper muted" style="margin:18px 0 8px">Coaching tips</div><ul class="tips">${w.tips.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
     <div style="height:18px"></div>
     ${canStart ? `<button class="btn primary lg block" data-start-workout="${w.id}">${icon('play', 'sm')} ${w.type === 'strength' || w.type === 'mobility' ? 'Start session' : 'Start workout'}</button>` : ''}
@@ -63,7 +64,7 @@ export function openWorkout(id) {
       ${w.source === 'user' ? `<button class="btn danger sm" data-delete-workout="${w.id}">${icon('trash', 'sm')} Delete</button>` : ''}
     </div>`;
   closeAllSheets();
-  openSheet(html);
+  openSheet(html, { onMount: (el) => el.querySelectorAll('[data-speedview]').forEach((b) => b.onclick = () => { prefs.set({ showSpeeds: b.dataset.speedview }); openWorkout(id); }) });
 }
 
 export async function setStatus(id, status) {
