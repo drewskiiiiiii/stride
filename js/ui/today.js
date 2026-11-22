@@ -35,7 +35,7 @@ export function renderToday() {
   const ws = startOfWeek(today);
   const stats = weekStats(workouts, activities, ws, today);
   const countdown = raceCountdown(plan, today);
-  const insights = buildInsights({ plan, workouts, activities, today });
+  const insights = buildInsights({ plan, workouts, activities, today, checkins: store.state.meta.checkins || {} });
   const upcoming = workouts.filter((w) => w.date > today && w.date <= addDays(today, 6) && w.type !== 'rest' && w.status === 'planned').slice(0, 5);
   const nextLong = workouts.find((w) => w.date >= today && w.type === 'long' && w.status === 'planned');
   const keyUpcoming = workouts.filter((w) => w.date > today && w.key && w.type !== 'long' && w.status === 'planned').slice(0, 3);

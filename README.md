@@ -18,6 +18,20 @@ A personal running coach that works fully offline after first load: onboarding a
 
 **Local testing:** `python3 -m http.server 8000` in this folder, then open `http://localhost:8000` (localhost counts as a secure context).
 
+## What's new in v2.3 — Pause, resume and discard
+- **Pause:** the moment you pause, the timer, interval countdowns, distance and voice cues stop, and anything queued to be spoken is cancelled.
+  - **GPS:** tracking stops while paused, and any reading taken during the pause is ignored.
+  - **Treadmill:** distance stops accumulating, and your speed history is kept.
+  - **What you see:** a flashing **PAUSED** banner with the current pause length, plus a panel showing active time, total paused time and progress, a big Resume button, End & save, and a separate red-outlined Discard button.
+- **Resume:** you continue exactly where you left off, with the same interval, the same remaining time or distance, and the same completed laps.
+  - **Time and pace:** paused time is excluded from duration and pace.
+  - **GPS:** the first fix after resuming only sets a new starting point, so there is no distance jump. Persistent GPS jumps re-anchor the same way.
+  - **Voice:** a short "Resuming. 800m rep, 300 metres left." with no repeated cues.
+- **Discard:** asks for confirmation ("Discard this workout?", with *Keep Workout* / *Discard Workout*), then deletes the session and its tracking data.
+  - **What stays the same:** no history entry is created, and nothing changes in mileage, completion, personal records or pace analysis. The planned workout stays on the calendar unchanged, never marked missed or completed, and the plan isn't adjusted.
+  - **Afterwards:** a gentle prompt offers to reschedule it (using the rescheduling flow) or to give optional fatigue, soreness and recovery feedback. That feedback only informs coach suggestions.
+- **Interrupted sessions** (app switched, screen locked, refreshed, closed, battery died): the next launch offers **Resume Workout** or **Discard Workout**, and never completes the workout automatically.
+
 ## What's new in v2.2 — Interactive rescheduling
 - **Every reschedule asks first.** Any move (drag-and-drop, long-press or the Move button) asks: *"Would you like to dynamically reschedule your remaining workouts to maintain proper recovery time and training balance?"*
 - **Yes — dynamic:** reorganises this week and next around the new date, then shows a **preview** before anything changes. The preview lists original → new dates, unchanged workouts, anything shortened or skipped (with reasons), rest days before → after, back-to-back hard days before → after, and weekly mileage and quality sessions before → after. Apply it, or cancel to keep the original schedule.
@@ -93,7 +107,7 @@ js/engine/  PURE, DOM-free, deterministic — unit-tested in Node
   performance.js       workout evaluation, multi-session trends, per-zone pace offsets, assessments, recovery check-in
 js/services/ workout-session.js (timestamp-based timer state machine) · gps.js · audio-coach.js (speech, beeps, vibration, wake lock, notifications)
 js/ui/      onboarding · preview · today · plan · calendar · dragdrop · progress · profile · live (workout mode) · coach · actions · adjust · charts · insights · format · dom
-tests/run-tests.js   `node tests/run-tests.js` — 65 engine, scheduling, rescheduling, adaptive-coaching, treadmill, timer and data tests
+tests/run-tests.js   `node tests/run-tests.js` — 68 engine, scheduling, rescheduling, pause/resume, adaptive-coaching, treadmill, timer and data tests
 ```
 
 ### How the plan engine works

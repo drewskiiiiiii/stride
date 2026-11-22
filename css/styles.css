@@ -379,3 +379,7 @@ input[type='date'].input, input[type='time'].input { -webkit-appearance: none; a
 .tips li + li { margin-top: 6px; }
 .offline-pill { position: fixed; top: calc(var(--safe-t) + 8px); right: 12px; z-index: 40; }
 body:has(.sheet.show) .toast-wrap, body:has(.live) .toast-wrap { bottom: auto; top: calc(var(--safe-t) + 12px); }
+
+/* dialogs opened during a live workout must sit above the workout screen */
+body:has(.live) .backdrop { z-index: 95; }
+body:has(.live) .sheet { z-index: 96; }

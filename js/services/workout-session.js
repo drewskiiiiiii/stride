@@ -106,15 +106,23 @@ export function start(s, now) {
 
 export function pause(s, now) {
   if (s.status !== 'running') return [];
+  if (s.tm) s.distance = distanceFromLog(s.tm.speedLog, elapsedMs(s, now));
   s.status = 'paused'; s.pauseStart = now;
+  s.pauseCount = (s.pauseCount || 0) + 1;
   return [{ type: 'pause' }];
 }
 
 export function resume(s, now) {
   if (s.status !== 'paused') return [];
   s.pausedMs += now - s.pauseStart; s.pauseStart = null; s.status = 'running';
-  s.lastPoint = null; // do not bridge GPS distance across a pause
+  s.lastPoint = null;   // do not bridge GPS distance across a pause — the first new fix becomes the anchor
+  s.paceSamples = [];   // current pace restarts from fresh samples (no pre-pause data)
   return [{ type: 'resume' }];
+}
+
+/** Total paused time so far, including an ongoing pause (ms). */
+export function pausedMsTotal(s, now) {
+  return (s.pausedMs || 0) + (s.pauseStart != null ? now - s.pauseStart : 0);
 }
 
 function closeLap(s, now, { skipped = false, exactMs = null, partial = false } = {}) {
@@ -238,7 +246,7 @@ export function finish(s, now, { lapClosed = false } = {}) {
 export function addGpsPoint(s, p) {
   if (s.mode !== 'gps') return false;
   s.gpsStatus = p.acc <= 25 ? 'good' : p.acc <= 50 ? 'weak' : 'poor';
-  if (s.status !== 'running') { s.lastPoint = p.acc <= 50 ? p : s.lastPoint; return false; }
+  if (s.status !== 'running') return false; // readings while paused/ready are ignored entirely
   if (p.acc > 50) return false;
   const last = s.lastPoint;
   if (!last) { s.lastPoint = p; s.route.push([+p.lat.toFixed(6), +p.lng.toFixed(6), Math.round(elapsedMs(s, p.t) / 1000)]); return true; }
@@ -246,7 +254,14 @@ export function addGpsPoint(s, p) {
   const dt = (p.t - last.t) / 1000;
   if (dt <= 0) return false;
   const speed = d / dt;
-  if (speed > 12) return false; // > 12 m/s is not running — GPS jump
+  if (speed > 12) {
+    // a GPS jump: ignore it — but if fixes keep disagreeing with the anchor (e.g. after a pause,
+    // a tunnel or a long signal gap), re-anchor at the new position without adding distance
+    s.gpsRejects = (s.gpsRejects || 0) + 1;
+    if (s.gpsRejects >= 3 || dt > 20) { s.lastPoint = p; s.gpsRejects = 0; s.paceSamples = []; }
+    return false;
+  }
+  s.gpsRejects = 0;
   if (d < Math.max(3, Math.min(p.acc, last.acc) * 0.4)) return false; // jitter while standing
   s.distance += d;
   s.lastPoint = p;
@@ -315,6 +330,7 @@ export function toActivity(s, { date, rpe = null, notes = '', manualDistance = n
     startedAt: s.startedAt, finishedAt: s.finishedAt, duration, distance,
     avgPace: distance > 50 ? duration / (distance / 1000) : null, laps, route: s.route, mode: s.mode,
     completionPct, fastestLap: fastest ? { label: fastest.label, rep: fastest.rep, avgPace: fastest.avgPace } : null,
+    pausedSec: Math.round((s.pausedMs || 0) / 1000), pauseCount: s.pauseCount || 0,
     rpe, notes, source: s.mode === 'treadmill' ? 'treadmill' : 'live', distanceEstimated: s.mode !== 'gps' && !manualDistance && !tmMeasured,
     ...(s.tm ? { treadmill: { unit: s.tm.unit, speedLog: s.tm.speedLog, changes: s.tm.changes.length } } : {}),
   };

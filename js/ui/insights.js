@@ -19,7 +19,7 @@ export function weekStats(workouts, activities, weekStart, today) {
   return { ws, runs, completed, missed, remaining, doneDist, targetDist, pct: runs.length ? Math.round((completed.length / runs.length) * 100) : 0 };
 }
 
-export function buildInsights({ plan, workouts, activities, today }) {
+export function buildInsights({ plan, workouts, activities, today, checkins = {} }) {
   const out = [];
   if (!plan) return out;
   const ws = startOfWeek(today);
@@ -42,6 +42,10 @@ export function buildInsights({ plan, workouts, activities, today }) {
   const highRpe = recentActs.filter((a) => a.rpe >= 8);
   if (yesterday.some((w) => isHard(w) || w.type === 'long')) out.push({ kind: 'info', icon: 'recovery', title: 'Recovery focus today', body: 'You completed a demanding session yesterday. Keep today genuinely easy — hydrate, eat well and sleep.' });
   else if (highRpe.length >= 2) out.push({ kind: 'warn', icon: 'heart', title: 'Recent sessions felt very hard', body: 'Two or more recent runs were rated 8+ effort. If you feel run-down, swap the next hard day for an easy run or rest.' });
+
+  // explicitly submitted recovery feedback (daily check-in or after discarding a workout)
+  const recentFb = [today, addDays(today, -1)].map((d) => checkins[d] && { ...checkins[d], d }).filter(Boolean).filter((c) => ['easy', 'rest', 'reduce'].includes(c.rec))[0];
+  if (recentFb && !(recentFb.d === today && recentFb.source !== 'discard')) out.push({ kind: 'warn', icon: 'heart', title: recentFb.source === 'discard' ? 'You stopped a session to recover' : 'Recovery check-in flagged fatigue', body: 'You reported you weren’t fully recovered. Keep your next run conversational, and use the daily check-in before the next hard session — the plan itself is unchanged.' });
 
   // workload — struggling
   const wl = workloadCheck(workouts, activities, today);

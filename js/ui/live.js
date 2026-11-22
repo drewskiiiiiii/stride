@@ -35,6 +35,87 @@ function applyCuePrefs(s) {
   s.updateEverySec = periodic && !s.supp ? (p.updateEvery || 5) * 60 : 0;
 }
 
+// ---------------------------------------------------------------- pause / resume / discard
+function doPause() {
+  if (!S || S.status !== 'running') return;
+  handle(WS.pause(S, now()));
+  audio.stop();                       // silence anything queued
+  if (S.mode === 'gps') gps.stop();   // no GPS readings are used while paused
+  audio.beep({ freq: 520, dur: 0.2 }); audio.vibrate([120]);
+  persist(true); update();
+}
+function doResume() {
+  if (!S || S.status !== 'paused') return;
+  handle(WS.resume(S, now()));
+  if (S.mode === 'gps') startGps();   // re-acquire; first fix anchors distance (no jump)
+  wake.acquire();
+  const st = WS.currentStep(S); const rem = WS.stepRemaining(S, now());
+  const left = rem?.kind === 'time' ? `${Math.ceil(rem.value / 60)} minute${Math.ceil(rem.value / 60) === 1 ? '' : 's'} left` : rem?.kind === 'distance' ? `${Math.round(rem.value)} metres left` : '';
+  audio.say(`Resuming. ${st ? st.label : ''}${left ? ', ' + left : ''}.`);
+  persist(true); update();
+}
+async function confirmDiscard() {
+  if (!S) return;
+  const wasRunning = S.status === 'running';
+  if (wasRunning) doPause();
+  const ok = await confirmDialog({
+    title: 'Discard this workout?',
+    body: 'This will permanently cancel the current workout session without saving it to your workout history or counting it toward your training progress.<br><br>Your scheduled workout will remain on your training calendar.',
+    confirm: 'Discard Workout', cancel: 'Keep Workout', danger: true,
+  });
+  if (!ok) { update(); return; } // back to the paused workout, state untouched
+  discardSession();
+}
+/** Delete the active session and its tracking data. No history, no metrics, plan untouched. */
+export function discardSession({ quiet = false } = {}) {
+  const sess = S || sessionStore.load();
+  const info = sess ? { workoutId: sess.workoutId, title: sess.title } : null;
+  audio.stop();
+  sessionStore.clear();
+  unmount();
+  if (!quiet) {
+    location.hash = '#/today';
+    onExit && onExit();
+    setTimeout(() => afterDiscard(info), 300);
+  }
+  return info;
+}
+function afterDiscard(info) {
+  const w = info?.workoutId ? store.workout(info.workoutId) : null;
+  openSheet(`
+    <div class="sheet-head"><div><div class="small muted">Workout discarded</div><h2>Nothing was saved</h2></div><button class="icon-btn" data-close>${icon('x', 'sm')}</button></div>
+    <p class="muted">${w ? `<b style="color:var(--text)">${esc(w.title)}</b> is still on your calendar for ${esc(fmtLongDate(w.date))}. ` : ''}It won’t count as completed or missed, and your history and pace targets are unchanged.</p>
+    <div class="stack" style="margin-top:14px">
+      ${w && w.status === 'planned' ? `<button class="btn block" data-ad="move">${icon('calendar', 'sm')} Reschedule this workout</button>` : ''}
+      <button class="btn ghost block" data-ad="feel">${icon('heart', 'sm')} Tell the coach how you feel (optional)</button>
+      <button class="btn primary block" data-close>Done</button>
+    </div>`, {
+    onMount: (el, api) => {
+      const mv = el.querySelector('[data-ad="move"]');
+      if (mv) mv.onclick = async () => { api.close(); const { openMove } = await import('./actions.js'); setTimeout(() => openMove(w.id), 220); };
+      el.querySelector('[data-ad="feel"]').onclick = () => { api.close(); setTimeout(() => recoveryFeedback(w), 220); };
+    },
+  });
+}
+function recoveryFeedback(w) {
+  const c = { legs: 3, fatigue: 3, sleep: 3, pain: 'none', source: 'discard', workoutTitle: w?.title || null };
+  const opts3 = (k, labels) => `<div class="field"><span class="lbl">${{ legs: 'Soreness', fatigue: 'Fatigue', sleep: 'Recovery / sleep' }[k]}</span><div class="seg">${labels.map((l, i) => `<button type="button" data-k="${k}" data-v="${i + 1}" class="${c[k] === i + 1 ? 'sel' : ''}" style="font-size:12px">${l}</button>`).join('')}</div></div>`;
+  const render = () => `
+    <div class="sheet-head"><div><div class="small muted">Optional recovery feedback</div><h2>How are you feeling?</h2></div><button class="icon-btn" data-close>${icon('x', 'sm')}</button></div>
+    <p class="small muted">This only informs future recommendations (like suggesting an easier next session). It doesn’t change your plan by itself, and the app won’t assume an injury.</p>
+    ${opts3('legs', ['None', 'Mild', 'Moderate', 'Sore', 'Very sore'])}${opts3('fatigue', ['Fresh', 'OK', 'Tired', 'Very tired', 'Drained'])}${opts3('sleep', ['Great', 'Good', 'Average', 'Poor', 'Very poor'])}
+    <button class="btn primary lg block" data-save>Save feedback</button>`;
+  const sh = openSheet(render(), { onMount: bind });
+  function bind(el) {
+    el.querySelectorAll('[data-k]').forEach((b) => b.onclick = () => { c[b.dataset.k] = Number(b.dataset.v); sh.set(render()); });
+    el.querySelector('[data-save]').onclick = async () => {
+      const score = c.legs + c.fatigue + c.sleep;
+      await store.saveCheckin(todayISO(), { ...c, rec: score >= 12 ? 'rest' : score >= 9 ? 'easy' : 'go', at: Date.now() });
+      sh.close(); toast('Thanks — the coach will factor this into upcoming suggestions');
+    };
+  }
+}
+
 // ---------------------------------------------------------------- treadmill helpers
 const TM = () => S && S.mode === 'treadmill' && S.tm;
 function setSpeed(v, { silent = false } = {}) {
@@ -142,15 +223,20 @@ export async function checkRecovery(exitCb) {
     <div class="sheet-head"><div><div class="small muted">Workout interrupted</div><h2>${esc(s.title)}</h2></div></div>
     <p class="muted">The app was closed ${gapMin < 90 ? Math.round(gapMin) + ' minutes' : Math.round(gapMin / 60) + ' hours'} ago, ${fmtDuration(elapsedAtSave)} into this workout${s.distance ? ` (${fmtDist(s.distance)})` : ''}.</p>
     <div class="options">
-      <button class="opt" data-r="resume-pause"><span class="radio"></span><span class="grow"><div class="ot">Resume — exclude the gap</div><div class="os">Time while closed is treated as paused</div></span></button>
-      <button class="opt" data-r="resume-keep"><span class="radio"></span><span class="grow"><div class="ot">Resume — I kept running</div><div class="os">Count the time while the app was closed</div></span></button>
-      <button class="opt" data-r="finish"><span class="radio"></span><span class="grow"><div class="ot">Finish & save</div><div class="os">Save what was recorded up to the interruption</div></span></button>
-      <button class="opt" data-r="discard"><span class="radio"></span><span class="grow"><div class="ot" style="color:var(--danger)">Discard workout</div></span></button>
+      <button class="opt" data-r="resume-pause"><span class="radio"></span><span class="grow"><div class="ot">Resume Workout</div><div class="os">Continue where you left off — time away counts as paused</div></span></button>
+      <button class="opt" data-r="resume-keep"><span class="radio"></span><span class="grow"><div class="ot">Resume — I kept running</div><div class="os">Count the time while the app was closed as active</div></span></button>
+      <button class="opt" data-r="discard"><span class="radio"></span><span class="grow"><div class="ot" style="color:var(--danger)">Discard Workout</div><div class="os">Cancel it completely — nothing is saved</div></span></button>
+      <button class="link-btn" data-r="finish" style="margin-top:4px">Or save what was recorded up to the interruption</button>
     </div>`, {
-    onMount: (el) => el.querySelectorAll('[data-r]').forEach((b) => b.onclick = () => {
-      const r = b.dataset.r; sh.close();
+    onMount: (el) => el.querySelectorAll('[data-r]').forEach((b) => b.onclick = async () => {
+      const r = b.dataset.r;
+      if (r === 'discard') {
+        const ok = await confirmDialog({ title: 'Discard this workout?', body: 'This will permanently cancel the current workout session without saving it to your workout history or counting it toward your training progress.<br><br>Your scheduled workout will remain on your training calendar.', confirm: 'Discard Workout', cancel: 'Keep Workout', danger: true });
+        if (!ok) return; // keep the recovery choices open
+        sh.close(); S = s; onExit = exitCb; discardSession(); return;
+      }
+      sh.close();
       S = s; onExit = exitCb;
-      if (r === 'discard') { sessionStore.clear(); S = null; return; }
       if (r === 'resume-pause') {
         if (S.status === 'running') { S.pausedMs += now() - S.lastSaved; }
         else if (S.status === 'paused') { /* already paused, gap is part of the pause */ }
@@ -299,9 +385,11 @@ function renderRunning() {
   root.innerHTML = `
     <div class="live-top">
       <span class="ttl">${esc(S.title)}</span>
-      ${S.mode === 'gps' ? `<span class="pill ${S.gpsStatus}" data-gps-pill>${gpsLabel()}</span>` : `<span class="pill off">${S.mode === 'treadmill' ? 'Treadmill' : S.supp ? 'Session' : 'Timer'}</span>`}
+      <span class="row" style="gap:6px"><button class="pill voice-pill" data-l="voice" data-u="voice" aria-label="Toggle voice coach"></button>
+      ${S.mode === 'gps' ? `<span class="pill ${S.gpsStatus}" data-gps-pill>${gpsLabel()}</span>` : `<span class="pill off">${S.mode === 'treadmill' ? 'Treadmill' : S.supp ? 'Session' : 'Timer'}</span>`}</span>
     </div>
     <div class="live-seg" data-u="seg"></div>
+    <div class="paused-banner" data-u="pausedbanner" hidden><span class="dot"></span> PAUSED <span class="num" data-u="pausednow">0:00</span></div>
     <div class="live-phase"><div class="k" data-u="kind"></div><div class="lbl" data-u="label"></div><div class="rep" data-u="rep"></div></div>
     <div class="live-main">
       <div class="live-big" data-u="big">0:00</div>
@@ -317,6 +405,17 @@ function renderRunning() {
     </div>
     ${S.supp ? '' : '<div class="live-sub-stats" data-u="substats"></div>'}
     <div class="live-next" data-u="next"></div>
+    <div class="pause-panel" data-u="pausepanel" hidden>
+      <div class="pp-stats">
+        <div><div class="v num" data-u="ppactive">0:00</div><div class="l">Active time</div></div>
+        <div><div class="v num" data-u="pppaused">0:00</div><div class="l">Total paused</div></div>
+        <div><div class="v num" data-u="ppprog">0%</div><div class="l">Progress</div></div>
+      </div>
+      <button class="pp-resume" data-l="resume">${icon('play')} Resume</button>
+      <button class="pp-end" data-l="end2">${icon('stop', 'sm')} End & save</button>
+      <div class="pp-sep"></div>
+      <button class="pp-discard" data-l="discard">${icon('trash', 'sm')} Discard workout</button>
+    </div>
     <div class="live-controls">
       <button class="side" data-l="prev" aria-label="Previous interval">${icon('prev')}</button>
       <button class="main-btn" data-l="main"></button>
@@ -333,19 +432,20 @@ function renderRunning() {
   root.querySelector('[data-l="next"]').onclick = debounced(() => { handle(WS.next(S, now())); persist(true); update(); });
   root.querySelector('[data-l="main"]').onclick = debounced(() => {
     const st = WS.currentStep(S);
-    if (st?.measure === 'manual' && S.status === 'running') handle(WS.completeManual(S, now()));
-    else if (S.status === 'running') { handle(WS.pause(S, now())); audio.say('Paused'); }
-    else if (S.status === 'paused') { handle(WS.resume(S, now())); audio.say('Resuming'); }
-    persist(true); update();
+    if (st?.measure === 'manual' && S.status === 'running') { handle(WS.completeManual(S, now())); persist(true); update(); }
+    else if (S.status === 'running') doPause();
+    else if (S.status === 'paused') doResume();
   });
-  root.querySelector('[data-l="pause2"]').onclick = () => {
-    if (S.status === 'running') { handle(WS.pause(S, now())); } else if (S.status === 'paused') { handle(WS.resume(S, now())); }
-    persist(true); update();
-  };
-  root.querySelector('[data-l="end"]').onclick = async () => {
+  root.querySelector('[data-l="pause2"]').onclick = debounced(() => { if (S.status === 'running') doPause(); else if (S.status === 'paused') doResume(); });
+  root.querySelector('[data-l="resume"]').onclick = debounced(doResume);
+  root.querySelector('[data-l="voice"]').onclick = () => { const on = !prefs.get().voice; prefs.set({ voice: on }); if (!on) audio.stop(); update(); };
+  const endSave = async () => {
     const ok = await confirmDialog({ title: 'End workout?', body: `You are ${Math.round(WS.progress(S, now()) * 100)}% through. Your progress so far will be saved.`, confirm: 'End & save', cancel: 'Keep going' });
     if (ok) { handle(WS.finish(S, now())); }
   };
+  root.querySelector('[data-l="end"]').onclick = endSave;
+  root.querySelector('[data-l="end2"]').onclick = endSave;
+  root.querySelector('[data-l="discard"]').onclick = () => confirmDiscard();
   // "Lock screen" = UI lock to prevent accidental taps in a pocket
   const lockBtn = root.querySelector('[data-l="lock"]');
   lockBtn.onclick = () => {
@@ -378,6 +478,20 @@ function update() {
   root.style.setProperty('--zc', `var(--z-${zoneColorKey(st?.zone || 'easy')})`);
   root.classList.toggle('paused-state', S.status === 'paused');
   const $ = (k) => root.querySelector(`[data-u="${k}"]`);
+  const paused = S.status === 'paused';
+  const pp = $('pausepanel');
+  if (pp) {
+    pp.hidden = !paused; $('pausedbanner').hidden = !paused;
+    root.querySelectorAll('.live-controls, .live-sub, .tm-panel, .tm-actions, .live-next').forEach((el) => { el.style.display = paused ? 'none' : ''; });
+    if (paused) {
+      $('pausednow').textContent = fmtDuration((t - S.pauseStart) / 1000);
+      $('ppactive').textContent = fmtDuration(WS.elapsedMs(S, t) / 1000);
+      $('pppaused').textContent = fmtDuration(WS.pausedMsTotal(S, t) / 1000);
+      $('ppprog').textContent = `${Math.round(WS.progress(S, t) * 100)}%`;
+    }
+  }
+  const vp = $('voice');
+  if (vp) { const on = prefs.get().voice && audio.speechSupported; vp.innerHTML = `${icon('volume', 'xs')} ${on ? 'Voice on' : 'Voice off'}`; vp.className = `pill voice-pill ${on ? 'good' : 'off'}`; }
   // segmented bar
   const segEl = $('seg');
   if (segEl && segEl.childElementCount !== S.steps.length) {

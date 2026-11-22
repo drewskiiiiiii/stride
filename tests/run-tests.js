@@ -448,6 +448,43 @@ t('treadmill trends are analysed separately from outdoor GPS runs', () => {
   ok(r.groups.threshold.source === 'treadmill' && r.suggestion && /treadmill/i.test(r.suggestion.explanation), JSON.stringify(r.groups.threshold));
 });
 
+console.log('Pause / resume');
+t('GPS: readings while paused are ignored and resume creates no distance jump', () => {
+  const s = WS.createSession(workout, { mode: 'gps', paces: trainingPaces(45), now: 0 });
+  WS.start(s, 0);
+  let lat = 40;
+  for (let i = 1; i <= 10; i++) { lat += 0.00009; WS.addGpsPoint(s, { lat, lng: -75, acc: 5, t: i * 4000 }); }
+  const before = s.distance;
+  WS.pause(s, 40_000);
+  for (let i = 1; i <= 30; i++) { lat += 0.0009; WS.addGpsPoint(s, { lat, lng: -75, acc: 5, t: 40_000 + i * 4000 }); } // walked 3 km while paused
+  ok(s.distance === before, 'distance grew while paused');
+  WS.resume(s, 400_000);
+  WS.addGpsPoint(s, { lat, lng: -75, acc: 5, t: 401_000 }); // first fix after resume = anchor only
+  ok(s.distance === before, 'jump on resume: ' + (s.distance - before));
+  lat += 0.00009; WS.addGpsPoint(s, { lat, lng: -75, acc: 5, t: 405_000 });
+  near(s.distance - before, 10, 1, 'normal accumulation after resume');
+  ok(s.paceSamples.every((p) => p.t >= 400_000), 'stale pace samples kept');
+});
+t('paused time excluded from active duration and pace; paused total tracked', () => {
+  const s = WS.createSession(workout, { mode: 'timer', now: 0 });
+  WS.start(s, 0); WS.pause(s, 300_000);
+  ok(WS.pausedMsTotal(s, 480_000) === 180_000);
+  WS.resume(s, 480_000); WS.pause(s, 600_000); WS.resume(s, 660_000);
+  ok(WS.elapsedMs(s, 700_000) === 460_000 && WS.pausedMsTotal(s, 700_000) === 240_000 && s.pauseCount === 2);
+  s.distance = 2000; WS.finish(s, 700_000);
+  const a = WS.toActivity(s, { date: TODAY, manualDistance: 2000 });
+  ok(a.duration === 460 && a.pausedSec === 240 && Math.abs(a.avgPace - 230) < 1, JSON.stringify({ d: a.duration, p: a.pausedSec, pace: a.avgPace }));
+});
+t('pausing mid-interval preserves step, remaining time and completed laps', () => {
+  const s = WS.createSession(workout, { mode: 'timer', paces: trainingPaces(45), now: 0 });
+  WS.start(s, 0); WS.tick(s, 600_500); WS.tick(s, 700_000);
+  const idx = s.stepIndex, rem = WS.stepRemaining(s, 700_000).value, laps = s.laps.length;
+  WS.pause(s, 700_000); WS.tick(s, 1_500_000);
+  const r = JSON.parse(JSON.stringify(s)); // survives a reload while paused
+  WS.resume(r, 1_500_000);
+  ok(r.stepIndex === idx && Math.abs(WS.stepRemaining(r, 1_500_000).value - rem) < 0.01 && r.laps.length === laps);
+});
+
 console.log('Dynamic rescheduling');
 const rsW = (id, date, type, title, dist) => ({ id, planId: 'p', date, type, title, status: 'planned', source: 'plan', estDistance: dist, estDuration: dist * 0.36, week: 2, steps: [{ kind: ['easy', 'recovery', 'long'].includes(type) ? 'steady' : 'work', label: title, measure: 'time', value: 1800, zone: type === 'intervals' ? 'interval' : type === 'tempo' ? 'tempo' : 'easy' }] });
 const rsWeek = () => [rsW('mon', '2026-11-30', 'easy', 'Easy Run', 6000), rsW('tue', '2026-12-01', 'intervals', 'Intervals', 8000), rsW('thu', '2026-12-03', 'tempo', 'Tempo', 9000), rsW('sat', '2026-12-05', 'long', 'Long Run', 16000), rsW('sun', '2026-12-06', 'recovery', 'Recovery Run', 5000),

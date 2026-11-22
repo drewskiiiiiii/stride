@@ -48,6 +48,9 @@ export const audio = {
     } catch { /* ignore */ }
   },
 
+  /** Stop speaking immediately and drop anything queued. */
+  stop() { try { if (this.speechSupported) speechSynthesis.cancel(); } catch { /* ignore */ } },
+
   beep({ freq = 880, dur = 0.15, times = 1, gap = 0.12, force = false } = {}) {
     const p = prefs.get();
     if (!force && !p.beeps) return;
