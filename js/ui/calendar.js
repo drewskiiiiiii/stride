@@ -26,7 +26,7 @@ function pill(w, today) {
   const short = { easy: 'Easy', long: 'Long', recovery: 'Recov', tempo: 'Tempo', threshold: 'Thresh', intervals: 'Intvl', reps: 'Speed', fartlek: 'Fartlek', hills: 'Hills', timetrial: 'TT', assessment: 'Test', race: 'RACE', runwalk: 'R/W', strength: 'Str', mobility: 'Mob', custom: 'Run' }[w.type] || 'Run';
   const dist = w.estDistance && isRun(w) && w.type !== 'race' ? fmtDist(w.estDistance, { withUnit: false, decimals: w.estDistance > 15000 ? 0 : 1 }) : '';
   const drag = canDrag(w, today) ? `data-drag-id="${w.id}"` : '';
-  return `<span class="cal-pill ${st} ${dist ? 'has-num' : ''}" data-z="${typeColor(w.type)}" ${drag}>${st === 'completed' ? '✓' : ''}<span class="pl">${esc(short)}</span>${dist ? `<span class="pn">${esc(dist)}</span>` : ''}</span>`;
+  return `<span class="cal-pill ${st} ${dist ? 'has-num' : ''} ${w.movedFrom ? 'moved' : ''} ${w.adjustedReason ? 'adjusted' : ''}" data-z="${typeColor(w.type)}" ${drag} title="${w.movedFrom ? 'Rescheduled from ' + esc(fmtDate(w.movedFrom)) : ''}">${st === 'completed' ? '✓' : w.movedFrom ? '↪' : ''}<span class="pl">${esc(short)}</span>${dist ? `<span class="pn">${esc(dist)}</span>` : ''}</span>`;
 }
 
 export function renderCalendar() {
@@ -42,7 +42,8 @@ export function renderCalendar() {
   const head = `<div class="page-head"><div><div class="sub">${plan ? esc(plan.name || plan.goal.label) : 'No active plan'}</div><h1>Calendar</h1></div>
     <div style="width:170px"><div class="seg"><button data-action="cal-mode" data-mode="month" class="${cal.mode === 'month' ? 'sel' : ''}">Month</button><button data-action="cal-mode" data-mode="week" class="${cal.mode === 'week' ? 'sel' : ''}">Week</button></div></div></div>`;
   const body = cal.mode === 'month' ? monthView(today) : weekView(today);
-  const legend = `<div class="tiny muted" style="margin-top:10px">${icon('move', 'xs')} Drag a workout to reschedule — long-press on touch screens. Every move is checked for recovery, long-run, taper and mileage conflicts.</div><div class="legend-row"><span><i class="dot" data-z="easy"></i>Easy</span><span><i class="dot" data-z="long"></i>Long</span><span><i class="dot" data-z="tempo"></i>Tempo</span><span><i class="dot" data-z="interval"></i>Intervals</span><span><i class="dot" data-z="strength"></i>Strength</span><span><i class="dot" data-z="mobility"></i>Mobility</span><span><i class="dot" style="background:var(--accent)"></i>Done</span><span><i class="dot" style="background:var(--danger)"></i>Missed</span></div>`;
+  const undo = store.canUndo() ? `<button class="btn sm ghost" data-action="undo-last" style="margin-top:10px">${icon('refresh', 'xs')} Undo: ${esc(store.state.meta.undo.title)}</button>` : '';
+  const legend = `${undo}<div class="tiny muted" style="margin-top:10px">${icon('move', 'xs')} Drag a workout to reschedule — long-press on touch screens. Every move is checked for recovery, long-run, taper and mileage conflicts.</div><div class="legend-row"><span><i class="dot" data-z="easy"></i>Easy</span><span><i class="dot" data-z="long"></i>Long</span><span><i class="dot" data-z="tempo"></i>Tempo</span><span><i class="dot" data-z="interval"></i>Intervals</span><span><i class="dot" data-z="strength"></i>Strength</span><span><i class="dot" data-z="mobility"></i>Mobility</span><span><i class="dot" style="background:var(--accent)"></i>Done</span><span><i class="dot" style="background:var(--danger)"></i>Missed</span><span>↪ Rescheduled</span></div>`;
   return `${head}<div class="grid-2"><div class="col"><div class="card" style="padding:14px">${toolbar}${body}${legend}</div></div>
     <div class="col">${cal.mode === 'month' ? dayPanel(cal.selected, today) : ''}</div></div>`;
 }
@@ -79,7 +80,7 @@ function monthView(today) {
 function itemRow(w, today, plan) {
   const st = effectiveStatus(w, today);
   return `<button class="workout-row ${st === 'completed' ? 'done' : ''}" data-z="${typeColor(w.type)}" data-action="open-workout" data-id="${w.id}" ${canDrag(w, today) ? `data-drag-id="${w.id}"` : ''}><span class="zbar"></span>
-    <div class="body"><div class="t">${esc(w.title)}</div><div class="s">${esc(typeLabel(w.type))}${w.type !== 'rest' ? ' · ' + esc(workoutLine(w, plan)) : ''}${st !== 'planned' && w.type !== 'rest' ? ' · ' + esc(statusLabel(st)) : ''}</div></div>
+    <div class="body"><div class="t">${esc(w.title)}${w.movedFrom ? ` <span class="chip" style="padding:2px 7px;font-size:10.5px">↪ from ${esc(fmtDate(w.movedFrom, { weekday: 'short' }))}</span>` : ''}${w.adjustedReason ? ' <span class="chip warn" style="padding:2px 7px;font-size:10.5px">adjusted</span>' : ''}</div><div class="s">${esc(typeLabel(w.type))}${w.type !== 'rest' ? ' · ' + esc(workoutLine(w, plan)) : ''}${st !== 'planned' && w.type !== 'rest' ? ' · ' + esc(statusLabel(st)) : ''}</div></div>
     ${st === 'completed' ? `<span class="status-ic completed">${icon('check', 'xs')}</span>` : st === 'missed' ? `<span class="status-ic missed">${icon('x', 'xs')}</span>` : icon('chevR', 'sm chev')}</button>`;
 }
 

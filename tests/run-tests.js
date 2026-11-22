@@ -9,6 +9,7 @@ import * as WS from '../js/services/workout-session.js';
 import { analyzeMissed, summarizeChanges, safeDays } from '../js/engine/scheduler.js';
 import { analyzeTrends, effectivePaces, recommendFromCheckin, assessmentDue, evaluateWorkout, vdotFromThreshold, reduceWorkout } from '../js/engine/performance.js';
 import { validateBackup } from '../js/core/migrate.js';
+import { planReschedule, applyUpdates, nextSuitableDay, isDemanding } from '../js/engine/reschedule.js';
 import { paceToSpeed, speedToPace, roundSpeed, stepSpeed, distanceFromLog, speedStatus, convertSpeed } from '../js/engine/treadmill.js';
 
 let pass = 0, fail = 0;
@@ -445,6 +446,49 @@ t('treadmill trends are analysed separately from outdoor GPS runs', () => {
   const tm = [2, 3, 4].map((i) => ({ ...mkAct(i, 'threshold', tp, tp[0] * 0.96, 6), id: 'tm' + i, source: 'treadmill', laps: [{ kind: 'work', zone: 'threshold', targetPace: tp, avgPace: tp[0] * 0.96, duration: 1200, distance: 4000, treadmill: true }] }));
   const r = analyzeTrends({ activities: [...out, ...tm], workouts: [], plan, today: '2026-12-30' });
   ok(r.groups.threshold.source === 'treadmill' && r.suggestion && /treadmill/i.test(r.suggestion.explanation), JSON.stringify(r.groups.threshold));
+});
+
+console.log('Dynamic rescheduling');
+const rsW = (id, date, type, title, dist) => ({ id, planId: 'p', date, type, title, status: 'planned', source: 'plan', estDistance: dist, estDuration: dist * 0.36, week: 2, steps: [{ kind: ['easy', 'recovery', 'long'].includes(type) ? 'steady' : 'work', label: title, measure: 'time', value: 1800, zone: type === 'intervals' ? 'interval' : type === 'tempo' ? 'tempo' : 'easy' }] });
+const rsWeek = () => [rsW('mon', '2026-11-30', 'easy', 'Easy Run', 6000), rsW('tue', '2026-12-01', 'intervals', 'Intervals', 8000), rsW('thu', '2026-12-03', 'tempo', 'Tempo', 9000), rsW('sat', '2026-12-05', 'long', 'Long Run', 16000), rsW('sun', '2026-12-06', 'recovery', 'Recovery Run', 5000),
+  rsW('n-tue', '2026-12-08', 'intervals', 'Intervals 2', 8500), rsW('n-thu', '2026-12-10', 'tempo', 'Tempo 2', 9500), rsW('n-sat', '2026-12-12', 'long', 'Long 2', 17000)];
+const rsPlan = (days = [0, 1, 2, 3, 4, 5, 6]) => ({ paces: trainingPaces(45), assumedEasy: 380, inputs: { availability: { days, longRunDay: 6 } }, raceDate: '2027-03-01', weeks: [] });
+const hardAdjacent = (list) => { const h = list.filter((x) => isRun(x) && x.status === 'planned' && isDemanding(x) && !x.adjustedReason).map((x) => x.date).sort(); return h.some((d, i) => i && diffDays(h[i - 1], d) < 2); };
+t('acceptance: Tue intervals → Wed, dynamic reorganises tempo/long/recovery with no back-to-back hard days', () => {
+  const ws = rsWeek();
+  const p = planReschedule(ws, ws.find((x) => x.id === 'tue'), '2026-12-02', { plan: rsPlan(), today: '2026-11-30' });
+  const after = applyUpdates(ws, p.updates);
+  ok(after.find((x) => x.id === 'tue').date === '2026-12-02', 'intervals not on Wed');
+  ok(!hardAdjacent(after), 'hard sessions adjacent: ' + after.filter((x) => isDemanding(x)).map((x) => x.title + '@' + x.date).join());
+  ok(p.conflicts.before.length >= 1 && p.conflicts.after.length === 0, 'conflict not resolved');
+  ok(p.weeks[0].after === p.weeks[0].before && p.weeks[0].qAfter === p.weeks[0].qBefore, 'mileage/quality not preserved');
+  ok(p.moves.every((m) => startOfWeekT(m.from) === startOfWeekT(m.to)), 'moved across weeks');
+  ok(p.moves.find((m) => m.w.id === 'sat')?.to === '2026-12-06' || p.moves.find((m) => m.w.id === 'sat')?.to === '2026-12-04' || !p.moves.find((m) => m.w.id === 'sat'), 'long run moved more than ±1 day');
+  ok(p.updates.every((u) => u.type === 'rest' || u.steps === ws.find((x) => x.id === u.id)?.steps), 'workout content rewritten');
+});
+t('no-room case: shortens quality instead of stacking hard days (easy runs flex first)', () => {
+  const ws = rsWeek().map((x) => (x.id === 'mon' ? { ...x, status: 'completed' } : x));
+  const p = planReschedule(ws, ws.find((x) => x.id === 'tue'), '2026-12-02', { plan: rsPlan([1, 2, 3, 4, 6]), today: '2026-12-01' });
+  const after = applyUpdates(ws, p.updates);
+  ok(!hardAdjacent(after), 'still adjacent');
+  ok(p.shortened.length + p.skipped.length >= 1, 'nothing shortened/skipped');
+  const sh = p.shortened[0]; if (sh) ok(/shortened/i.test(sh.reason) && after.find((x) => x.id === sh.w.id).adjustedReason, 'shortening not explained');
+  ok(after.find((x) => x.id === 'mon').date === '2026-11-30' && after.find((x) => x.id === 'mon').status === 'completed', 'completed workout touched');
+});
+t('repeated reschedules keep ids unique and remember the original date', () => {
+  let ws = rsWeek();
+  const p1 = planReschedule(ws, ws.find((x) => x.id === 'tue'), '2026-12-02', { plan: rsPlan(), today: '2026-11-30' });
+  ws = applyUpdates(ws, p1.updates);
+  const p2 = planReschedule(ws, ws.find((x) => x.id === 'tue'), '2026-12-03', { plan: rsPlan(), today: '2026-11-30' });
+  ws = applyUpdates(ws, p2.updates);
+  ok(new Set(ws.map((x) => x.id)).size === ws.length, 'duplicate ids');
+  ok(ws.find((x) => x.id === 'tue').movedFrom === '2026-12-01', 'original date lost');
+  ok(!hardAdjacent(ws), 'adjacent after second move');
+});
+t('next suitable day is offered for an unsafe manual move', () => {
+  const ws = rsWeek().filter((x) => !x.id.startsWith('n-'));
+  const d = nextSuitableDay(ws, ws.find((x) => x.id === 'tue'), '2026-12-02', { plan: rsPlan(), today: '2026-11-30' });
+  ok(d && !ws.some((x) => isDemanding(x) && x.id !== 'tue' && Math.abs(diffDays(x.date, d)) <= 1), 'unsafe suggestion ' + d);
 });
 
 console.log(`\n${pass} passed, ${fail} failed`);

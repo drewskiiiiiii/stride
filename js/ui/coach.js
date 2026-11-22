@@ -29,7 +29,9 @@ export function showSummary(s, { title } = {}) {
     ${mileage ? `<table class="lap-table">${mileage}</table>` : '<p class="muted small">Weekly mileage is unchanged.</p>'}
     ${s.race ? `<div class="notice ${s.race.ok ? 'ok' : 'warn'}" style="margin-top:14px">${icon(s.race.ok ? 'flag' : 'alert', 'sm')}<div><b>Race target</b><div>${esc(s.race.text)}</div></div></div>` : ''}
     <p class="tiny muted" style="margin-top:12px">Completed workouts and history are never changed. See all changes under Plan → Change history.</p>
-    <button class="btn primary block" data-close style="margin-top:6px">Got it</button>`);
+    <div class="btn-row" style="margin-top:6px">${store.canUndo() && !/^Undone/.test(s.title || '') ? `<button class="btn ghost" data-undo>${icon('refresh', 'sm')} Undo</button>` : ''}<button class="btn primary" data-close>Got it</button></div>`, {
+    onMount: (el, api) => { const u = el.querySelector('[data-undo]'); if (u) u.onclick = async () => { api.close(); const r = await store.undoLast(); if (!r.ok) toast(r.reason); else setTimeout(() => showSummary(r.summary), 250); }; },
+  });
 }
 
 // ---------------------------------------------------------------- missed workouts

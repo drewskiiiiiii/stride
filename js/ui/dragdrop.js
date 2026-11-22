@@ -7,6 +7,7 @@ import { todayISO, fmtDate, addDays } from '../core/dates.js';
 import { validateMove } from '../engine/adjustments.js';
 import { moveWithSummary } from './actions.js';
 import { showSummary } from './coach.js';
+import { requestReschedule } from './reschedule.js';
 
 let state = null;
 let suppressClick = false;
@@ -88,20 +89,7 @@ async function onUp(e) {
 }
 
 export async function attemptMove(w, date) {
-  const today = todayISO();
-  if (date < today) { openSheet(`<div class="sheet-head"><h2>Can’t move into the past</h2><button class="icon-btn" data-close>${icon('x', 'sm')}</button></div><p class="muted">Pick today or a later date.</p>`); return; }
-  const v = validateMove(store.state.workouts, w, date, today, { plan: store.state.plan });
-  if (!v.warnings.length) { showSummary(await moveWithSummary(w, date)); return; }
-  openSheet(`
-    <div class="sheet-head"><div><div class="small muted">Move ${esc(w.title)} → ${esc(fmtDate(date, { weekday: 'long', month: 'short', day: 'numeric' }))}</div><h2>${v.serious ? 'This creates a risky schedule' : 'Check before moving'}</h2></div><button class="icon-btn" data-close>${icon('x', 'sm')}</button></div>
-    ${v.warnings.map((x) => `<div class="notice ${v.serious ? 'danger' : 'warn'}">${icon('alert', 'sm')}<div>${esc(x)}</div></div>`).join('')}
-    <div class="btn-row" style="margin-top:14px"><button class="btn ghost" data-close>Cancel</button>${v.canSwap ? `<button class="btn" data-swap>${icon('swap', 'sm')} Swap</button>` : ''}<button class="btn ${v.serious ? 'danger' : 'primary'}" data-go>Move anyway</button></div>`, {
-    onMount: (el, api) => {
-      el.querySelector('[data-go]').onclick = async () => { api.close(); showSummary(await moveWithSummary(w, date, false)); };
-      const sw = el.querySelector('[data-swap]');
-      if (sw) sw.onclick = async () => { api.close(); showSummary(await moveWithSummary(w, date, true)); };
-    },
-  });
+  requestReschedule(w, date);
 }
 
 function cleanup() {

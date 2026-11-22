@@ -18,6 +18,23 @@ A personal running coach that works fully offline after first load: onboarding a
 
 **Local testing:** `python3 -m http.server 8000` in this folder, then open `http://localhost:8000` (localhost counts as a secure context).
 
+## What's new in v2.2 — Interactive rescheduling
+- **Every reschedule asks first.** Any move (drag-and-drop, long-press or the Move button) asks: *"Would you like to dynamically reschedule your remaining workouts to maintain proper recovery time and training balance?"*
+- **Yes — dynamic:** reorganises this week and next around the new date, then shows a **preview** before anything changes. The preview lists original → new dates, unchanged workouts, anything shortened or skipped (with reasons), rest days before → after, back-to-back hard days before → after, and weekly mileage and quality sessions before → after. Apply it, or cancel to keep the original schedule.
+- **No — move only:** moves just that workout. If it leaves less than 48 hours of recovery, you get a plain-language warning, the next suitable day as a recommendation, and an explicit "I accept the recovery risk" override.
+- **Engine rules, in priority order:**
+  1. About 48 hours between hard sessions (intervals, tempo, threshold, hills, fartlek, time trials, long runs).
+  2. The long run keeps its day, or moves ±1 day if that restores spacing.
+  3. The weekly number of quality sessions is kept.
+  4. Workouts stay in their own week, so weekly mileage is preserved.
+  5. Only your available days are used.
+  6. If there isn't room, easy runs move or drop first, then a quality session is shortened to about 60 %. It is skipped only as a last resort. Hard sessions are never stacked.
+  7. Only dates change unless the preview says otherwise. Completed and past workouts are never touched.
+- **Afterwards:**
+  - **Markers:** rescheduled workouts show ↪, and shortened ones are marked "adjusted".
+  - **Undo:** you can undo the most recent schedule change from the summary, the Calendar or the Plan tab. It's refused if a workout involved has since been completed.
+  - **Saving:** every change is saved offline in IndexedDB and logged in Change history. Repeated moves never duplicate workouts.
+
 ## What's new in v2.1 — Treadmill coaching
 - **Speeds for every segment:** each segment's prescribed pace is converted to a treadmill speed in mph or km/h, rounded to 0.1. When a pace range is prescribed, you get a speed range, with the target at its midpoint. Speeds show on every segment in workout details (toggle Pace / + Treadmill) and in the training-zone table. Hill repeats suggest a 6 % incline.
 - **Treadmill mode in live workouts:**
@@ -71,11 +88,12 @@ js/engine/  PURE, DOM-free, deterministic — unit-tested in Node
   training-engine.js   periodised plan generator (phases, volume progression, recovery weeks, taper, scheduling)
   adjustments.js       move validation (recovery / long run / taper / mileage), regeneration merge, benchmarks
   scheduler.js         missed-workout analysis & options, change summaries (incl. race realism)
+  reschedule.js        recovery-aware dynamic rescheduling (window this + next week), previews, next suitable day
   treadmill.js         pace↔speed (mph/km/h), 0.1 rounding, per-segment speed ranges, distance from speed log
   performance.js       workout evaluation, multi-session trends, per-zone pace offsets, assessments, recovery check-in
 js/services/ workout-session.js (timestamp-based timer state machine) · gps.js · audio-coach.js (speech, beeps, vibration, wake lock, notifications)
 js/ui/      onboarding · preview · today · plan · calendar · dragdrop · progress · profile · live (workout mode) · coach · actions · adjust · charts · insights · format · dom
-tests/run-tests.js   `node tests/run-tests.js` — 61 engine, scheduling, adaptive-coaching, treadmill, timer and data tests
+tests/run-tests.js   `node tests/run-tests.js` — 65 engine, scheduling, rescheduling, adaptive-coaching, treadmill, timer and data tests
 ```
 
 ### How the plan engine works

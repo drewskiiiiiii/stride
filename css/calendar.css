@@ -52,3 +52,6 @@
 .drag-ghost[data-warn='1'] { background: var(--danger); color: #fff; }
 .drop-target { outline: 2px solid var(--accent); outline-offset: -2px; background: var(--accent-soft) !important; }
 .drop-target.drop-bad { outline-color: var(--danger); background: color-mix(in srgb, var(--danger) 12%, transparent) !important; }
+
+.cal-pill.moved { box-shadow: inset 0 0 0 1.5px var(--zc); background: transparent; }
+.cal-pill.adjusted { border-bottom: 2px dashed var(--warn); }

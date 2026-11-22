@@ -98,7 +98,7 @@ export function openMove(id) {
     <div class="sheet-head"><div><div class="small muted">Move workout</div><h2>${esc(w.title)}</h2></div><button class="icon-btn" data-close>${icon('x', 'sm')}</button></div>
     <label class="field"><span class="lbl">New date</span><select class="input" data-mv-date>${opts(days.map((d) => ({ value: d, label: `${fmtDate(d)}${store.workoutsOn(d).filter(isRun).length ? ' — ' + store.workoutsOn(d).filter(isRun).map((x) => x.title).join(', ') : ''}` })), days.find((d) => d > w.date) || days[0])}</select></label>
     <div data-mv-warn></div>
-    <div class="btn-row" style="margin-top:12px"><button class="btn ghost" data-mv-swap hidden>${icon('swap', 'sm')} Swap</button><button class="btn primary" data-mv-go>Move here</button></div>
+    <div class="btn-row" style="margin-top:12px"><button class="btn ghost" data-mv-swap hidden>${icon('swap', 'sm')} Swap</button><button class="btn primary" data-mv-go>Continue</button></div>
     <p class="tiny muted" style="margin-top:12px">Moving a single workout does not change the rest of your plan. For travel, illness or schedule changes use <b>Plan Adjustment</b> on the Plan tab.</p>`, {
     onMount: (el) => {
       const sel = el.querySelector('[data-mv-date]');
@@ -107,14 +107,15 @@ export function openMove(id) {
       const update = () => {
         const v = validateMove(store.state.workouts, w, sel.value, today(), { plan: store.state.plan });
         warnBox.innerHTML = v.warnings.map((x) => `<div class="notice ${v.serious ? 'danger' : 'warn'}">${icon('alert', 'sm')}<div>${esc(x)}</div></div>`).join('') || `<div class="notice ok">${icon('check', 'sm')}<div>No conflicts — recovery, long run, taper and weekly mileage all check out.</div></div>`;
-        el.querySelector('[data-mv-go]').textContent = v.serious ? 'Move anyway' : 'Move here';
+        el.querySelector('[data-mv-go]').textContent = 'Continue';
         swapBtn.hidden = !v.canSwap;
       };
       sel.onchange = update; update();
       const go = async (swap) => {
-        const summary = await moveWithSummary(w, sel.value, swap);
         sheet.close();
-        setTimeout(() => showSummary(summary), 250);
+        if (swap) { const summary = await moveWithSummary(w, sel.value, true); setTimeout(() => showSummary(summary), 250); return; }
+        const { requestReschedule } = await import('./reschedule.js');
+        setTimeout(() => requestReschedule(w, sel.value), 220);
       };
       el.querySelector('[data-mv-go]').onclick = () => go(false);
       swapBtn.onclick = () => go(true);

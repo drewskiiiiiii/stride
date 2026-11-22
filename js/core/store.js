@@ -28,11 +28,12 @@ export const store = {
       db.get('profile', 'main'), db.all('plans'), db.all('activities'), db.get('meta', 'vdotHistory'), db.get('meta', 'races'),
       db.get('meta', 'checkins'), db.get('meta', 'changeLog'), db.get('meta', 'paceDecisions'),
     ]);
+    const undo = await db.get('meta', 'undo');
     const plan = plans.find((p) => p.status === 'active') || null;
     const workouts = plan ? await db.byIndex('workouts', 'planId', plan.id) : [];
     workouts.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
     activities.sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : (b.startedAt || 0) - (a.startedAt || 0)));
-    Object.assign(this.state, { loaded: true, profile: profile || null, plan, plans, workouts, activities, meta: { vdotHistory: vdotHistory || [], races: races || [], checkins: checkins || {}, changeLog: changeLog || [], paceDecisions: paceDecisions || {} } });
+    Object.assign(this.state, { loaded: true, profile: profile || null, plan, plans, workouts, activities, meta: { vdotHistory: vdotHistory || [], races: races || [], checkins: checkins || {}, changeLog: changeLog || [], paceDecisions: paceDecisions || {}, undo: undo || null } });
     this.emit();
   },
 
@@ -122,6 +123,7 @@ export const store = {
     await db.putMany('workouts', merged.workouts.filter((w) => w.date >= from || w.status !== 'planned'));
     this.state.plan = newPlan;
     this.state.workouts = merged.workouts;
+    this.state.meta.undo = null; db.put('meta', null, 'undo');
     this.lastSummary = summarizeChanges(before, merged.workouts, { beforePlan: plan, afterPlan: newPlan, today: this.today(), title: 'Plan updated', reason: '' });
     this.emit();
     return newPlan;
@@ -134,6 +136,13 @@ export const store = {
   async applyChange(change) {
     const before = this.state.workouts.slice();
     const beforePlan = this.state.plan;
+    if (change.updates?.length && !change.adjustments?.length) {
+      // undo snapshot: previous versions of every touched workout (null = newly created)
+      const prev = change.updates.map((u) => ({ id: u.id, was: before.find((x) => x.id === u.id) || null }));
+      const undo = { title: change.title, at: new Date().toISOString(), prev };
+      this.state.meta.undo = undo;
+      await db.put('meta', undo, 'undo');
+    } else if (change.adjustments?.length) { this.state.meta.undo = null; await db.put('meta', null, 'undo'); }
     if (change.updates?.length) await this.putWorkouts(change.updates);
     if (change.adjustments?.length) {
       await this.regenerate((inputs) => { inputs.adjustments = [...(inputs.adjustments || []), ...change.adjustments.map((a, i) => ({ id: a.id || `adj-${Date.now().toString(36)}${i}`, ...a }))]; });
@@ -151,6 +160,28 @@ export const store = {
     const summary = summarizeChanges(before, this.state.workouts, { beforePlan, afterPlan: this.state.plan, today: this.today(), title, reason, dropNote: true });
     await this.logChange(summary);
     return summary;
+  },
+
+  canUndo() { return !!this.state.meta.undo; },
+
+  /** Revert the most recent schedule change (moves, reschedules, missed/check-in adjustments). */
+  async undoLast() {
+    const u = this.state.meta.undo;
+    if (!u) return { ok: false, reason: 'Nothing to undo.' };
+    const cur = new Map(this.state.workouts.map((w) => [w.id, w]));
+    const blocked = u.prev.filter((p) => cur.get(p.id)?.status === 'completed' && p.was?.status !== 'completed');
+    if (blocked.length) return { ok: false, reason: `Can’t undo: ${blocked.map((b) => cur.get(b.id).title).join(', ')} has since been completed. Completed history is never rewritten.` };
+    const before = this.state.workouts.slice();
+    const restore = u.prev.filter((p) => p.was).map((p) => p.was);
+    const remove = u.prev.filter((p) => !p.was).map((p) => p.id);
+    if (remove.length) { await db.deleteMany('workouts', remove); this.state.workouts = this.state.workouts.filter((w) => !remove.includes(w.id)); }
+    if (restore.length) await this.putWorkouts(restore);
+    this.state.meta.undo = null;
+    await db.put('meta', null, 'undo');
+    const summary = summarizeChanges(before, this.state.workouts, { beforePlan: this.state.plan, afterPlan: this.state.plan, today: this.today(), title: `Undone: ${u.title}`, reason: 'Your previous schedule was restored exactly as it was.' });
+    await this.logChange(summary);
+    this.emit();
+    return { ok: true, summary };
   },
 
   async logChange(summary) {

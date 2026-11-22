@@ -1,6 +1,6 @@
 // Stride service worker — precaches the whole app so it runs fully offline.
 // Bump VERSION whenever any file changes so clients pick up the new cache.
-const VERSION = 'stride-v2.1.0';
+const VERSION = 'stride-v2.2.0';
 const ASSETS = [
   './',
   './index.html',
@@ -30,6 +30,7 @@ const ASSETS = [
   './js/engine/performance.js',
   './js/engine/scheduler.js',
   './js/engine/treadmill.js',
+  './js/engine/reschedule.js',
   './js/services/workout-session.js',
   './js/services/gps.js',
   './js/services/audio-coach.js',
@@ -49,6 +50,7 @@ const ASSETS = [
   './js/ui/live.js',
   './js/ui/coach.js',
   './js/ui/dragdrop.js',
+  './js/ui/reschedule.js',
 ];
 
 self.addEventListener('install', (event) => {

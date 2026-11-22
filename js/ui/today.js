@@ -118,7 +118,7 @@ export function renderToday() {
   const upcomingList = upcoming.length ? `<div class="section-title"><h2>Coming up</h2><a class="link-btn" href="#/calendar">Calendar</a></div>${upcoming.map((w) => `
     <button class="workout-row fade-in" data-z="${typeColor(w.type)}" data-action="open-workout" data-id="${w.id}"><span class="zbar"></span>
       <div class="date"><div class="d">${fmtDate(w.date, { day: 'numeric' })}</div><div class="w">${fmtDate(w.date, { weekday: 'short' })}</div></div>
-      <div class="body"><div class="t">${esc(w.title)}</div><div class="s">${esc(workoutLine(w, plan))}</div></div>${icon('chevR', 'sm chev')}</button>`).join('')}` : '';
+      <div class="body"><div class="t">${esc(w.title)}${w.movedFrom ? ' <span class="chip" style="padding:2px 7px;font-size:10.5px">↪ rescheduled</span>' : ''}</div><div class="s">${esc(workoutLine(w, plan))}</div></div>${icon('chevR', 'sm chev')}</button>`).join('')}` : '';
 
   // ---- adaptive coach cards ----
   const coachCards = [];

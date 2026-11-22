@@ -38,7 +38,7 @@ export function renderPlan() {
         const st = effectiveStatus(w, today);
         return `<button class="workout-row ${st === 'completed' ? 'done' : ''} ${w.date === today ? 'today' : ''}" data-z="${typeColor(w.type)}" data-action="open-workout" data-id="${w.id}"><span class="zbar"></span>
           <div class="date"><div class="d">${fmtDate(w.date, { day: 'numeric' })}</div><div class="w">${fmtDate(w.date, { weekday: 'short' })}</div></div>
-          <div class="body"><div class="t">${esc(w.title)}</div><div class="s">${esc(workoutLine(w, plan))}</div></div>
+          <div class="body"><div class="t">${esc(w.title)}${w.movedFrom ? ' <span class="chip" style="padding:2px 7px;font-size:10.5px">↪ rescheduled</span>' : ''}</div><div class="s">${esc(workoutLine(w, plan))}</div></div>
           ${st === 'completed' ? `<span class="status-ic completed">${icon('check', 'xs')}</span>` : st === 'missed' ? `<span class="status-ic missed">${icon('x', 'xs')}</span>` : st === 'skipped' ? `<span class="status-ic skipped">—</span>` : ''}
         </button>`;
       }).join('') : '<div class="muted small" style="padding:8px">No sessions</div>'}</div>` : ''}
@@ -74,6 +74,7 @@ export function renderPlan() {
     <div class="list">
       <button class="list-item" data-action="plan-settings">${icon('settings', 'sm')}<div class="grow"><div class="t">Change training preferences</div><div class="s">Days, volume, intensity, strength, race date</div></div>${icon('chevR', 'sm chev')}</button>
       <a class="list-item" href="#/new-plan">${icon('plus', 'sm')}<div class="grow"><div class="t">Start a new plan</div><div class="s">Your current plan is archived, history kept</div></div>${icon('chevR', 'sm chev')}</a>
+      ${store.canUndo() ? `<button class="list-item" data-action="undo-last">${icon('refresh', 'sm')}<div class="grow"><div class="t">Undo last change</div><div class="s">${esc(store.state.meta.undo.title)}</div></div>${icon('chevR', 'sm chev')}</button>` : ''}
       <button class="list-item" data-action="change-history">${icon('log', 'sm')}<div class="grow"><div class="t">Change history</div><div class="s">${(store.state.meta.changeLog || []).length} adjustments with explanations</div></div>${icon('chevR', 'sm chev')}</button>
       <button class="list-item" data-action="assessment">${icon('trophy', 'sm')}<div class="grow"><div class="t">Schedule a fitness assessment</div><div class="s">1 mile, 5K or 30-min threshold test</div></div>${icon('chevR', 'sm chev')}</button>
       <button class="list-item" data-action="export-ics">${icon('calendar', 'sm')}<div class="grow"><div class="t">Export to phone calendar</div><div class="s">.ics file with workout reminders</div></div>${icon('chevR', 'sm chev')}</button>

@@ -103,6 +103,7 @@ const ACTIONS = {
   'pace-suggestion': () => COACH.openPaceSuggestion(),
   assessment: () => COACH.openAssessmentPicker(),
   'change-history': () => COACH.openHistory(),
+  'undo-last': async () => { const r = await store.undoLast(); if (!r.ok) toast(r.reason); else COACH.showSummary(r.summary); },
   'prog-range': (el) => { prog.range = Number(el.dataset.range); render(); },
   'add-race': () => openAddRace(),
   'set-pref': (el) => { prefs.set({ [el.dataset.key]: el.dataset.val }); applyPrefs(); render(); },
