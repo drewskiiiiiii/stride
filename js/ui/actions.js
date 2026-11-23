@@ -9,7 +9,7 @@ import { effectiveStatus, validateMove, moveWorkout } from '../engine/adjustment
 import { estimateWorkout, isRun, TYPE_META } from '../engine/workout-utils.js';
 import { assessmentWorkout, easyRun } from '../engine/workouts.js';
 import { vdotFromRace } from '../engine/vdot.js';
-import { renderSteps, structureBar, workoutLine, typeColor, typeLabel, mainTarget, statusLabel, showSpeeds, speedUnit } from './format.js';
+import { renderSteps, structureBar, workoutLine, typeColor, typeLabel, mainTarget, statusLabel, showSpeeds, speedUnit, mainZone, isEffortBased } from './format.js';
 import { prefs } from '../core/storage.js';
 import { showSummary, openMissed, showEvaluation } from './coach.js';
 
@@ -40,7 +40,7 @@ export function openWorkout(id) {
     ${w.type !== 'rest' ? `<div class="metrics" style="margin-top:4px">
       ${w.estDuration ? `<div class="metric"><div class="v">${fmtMinutes(w.estDuration)}</div><div class="l">Est. time</div></div>` : ''}
       ${w.estDistance ? `<div class="metric"><div class="v">${fmtDist(w.estDistance)}</div><div class="l">Distance</div></div>` : ''}
-      ${isRun(w) ? `<div class="metric"><div class="v" style="font-size:16px;padding-top:5px">${esc(mainTarget(w, plan, profile) || '—')}</div><div class="l">Target</div></div>` : ''}
+      ${isRun(w) ? (() => { const z = mainZone(w, plan); const eff = isEffortBased({ zone: z }, plan); return `<div class="metric" ${eff ? `data-action="effort" data-zone="${esc(z)}" style="cursor:pointer"` : ''}><div class="v" style="font-size:16px;padding-top:5px">${esc(mainTarget(w, plan, profile) || '—')}${eff ? ` ${icon('info', 'xs')}` : ''}</div><div class="l">${eff ? 'Tap for what this means' : 'Target'}</div></div>`; })() : ''}
     </div>` : ''}
     ${structureBar(w, plan)}
     <p style="color:var(--text-2);margin:14px 0">${esc(w.purpose || '')}</p>

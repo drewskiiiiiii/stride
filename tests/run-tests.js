@@ -448,6 +448,23 @@ t('treadmill trends are analysed separately from outdoor GPS runs', () => {
   ok(r.groups.threshold.source === 'treadmill' && r.suggestion && /treadmill/i.test(r.suggestion.explanation), JSON.stringify(r.groups.threshold));
 });
 
+console.log('Effort (RPE) guidance');
+{
+  const { effortGuide, startingPace, parseRpe } = await import('../js/engine/effort.js');
+  t('RPE ranges parse and map to the 1–10 scale', () => { ok(JSON.stringify(parseRpe('3–4')) === '[3,4]' && JSON.stringify(parseRpe('9')) === '[9,9]'); const g = effortGuide('easy', null); ok(g.scale.map((x) => x.n).join() === '3,4' && /full sentences/.test(g.talk)); });
+  t('starting pace for effort-only plans is a conservative estimate (labelled as such)', () => {
+    const sp = startingPace('easy', { paces: null, assumedEasy: 400, paceConfidence: 'none' });
+    ok(sp.basis === 'experience' && sp.range[0] < 400 && sp.range[1] > 400 * 1.05, JSON.stringify(sp));
+    const tempo = startingPace('tempo', { paces: null, assumedEasy: 400 });
+    ok(tempo.range[1] < sp.range[0], 'tempo should start faster than easy');
+  });
+  t('with only an easy pace, the estimate is based on it; with zones, the real zone is used', () => {
+    ok(startingPace('easy', { paces: { easy: [380, 410] }, assumedEasy: 395, paceConfidence: 'low' }).basis === 'zones');
+    ok(startingPace('tempo', { paces: { easy: [380, 410] }, assumedEasy: 395, paceConfidence: 'low' }).basis === 'easyPace');
+    const p = trainingPaces(45); ok(startingPace('threshold', { paces: p }).range[0] === p.threshold[0]);
+  });
+}
+
 console.log('Pause / resume');
 t('GPS: readings while paused are ignored and resume creates no distance jump', () => {
   const s = WS.createSession(workout, { mode: 'gps', paces: trainingPaces(45), now: 0 });

@@ -7,7 +7,8 @@ import { todayISO, startOfWeek, addDays, fmtDate, fmtLongDate, DAY_SHORT, diffDa
 import { fmtDist, fmtMinutes, fmtDuration, fmtPace, distLabel, toDisplayDist } from '../core/units.js';
 import { effectiveStatus } from '../engine/adjustments.js';
 import { isRun } from '../engine/workout-utils.js';
-import { workoutLine, typeColor, typeLabel, typeIcon, mainTarget, structureBar, relDay } from './format.js';
+import { workoutLine, typeColor, typeLabel, typeIcon, mainTarget, structureBar, relDay, mainZone, isEffortBased } from './format.js';
+import { startHint } from './effort.js';
 import { buildInsights, weekStats, raceCountdown } from './insights.js';
 import { pendingMissed, checkinNeeded, currentTrends, currentAssessmentDue } from './coach.js';
 
@@ -63,7 +64,7 @@ export function renderToday() {
         <div class="metrics">
           ${runToday.estDuration ? `<div class="metric"><div class="v">${fmtMinutes(runToday.estDuration)}</div><div class="l">Duration</div></div>` : ''}
           ${runToday.estDistance ? `<div class="metric"><div class="v">${fmtDist(runToday.estDistance)}</div><div class="l">Distance</div></div>` : ''}
-          <div class="metric"><div class="v" style="font-size:16px;padding-top:4px">${esc(mainTarget(runToday, plan, profile) || '—')}</div><div class="l">Target</div></div>
+          ${(() => { const z = mainZone(runToday, plan); const eff = isEffortBased({ zone: z }, plan); return `<div class="metric" ${eff ? `data-action="effort" data-zone="${esc(z)}" style="cursor:pointer"` : ''}><div class="v" style="font-size:16px;padding-top:4px">${esc(mainTarget(runToday, plan, profile) || '—')}${eff ? ` ${icon('info', 'xs')}` : ''}</div><div class="l">${eff ? esc(startHint(z, plan) || 'Target') : 'Target'}</div></div>`; })()}
         </div>
         <div class="btn-row"><button class="btn primary lg" data-action="start-workout" data-id="${runToday.id}">${icon('play', 'sm')} Start workout</button><button class="btn lg" data-action="open-workout" data-id="${runToday.id}" aria-label="Details">${icon('info', 'sm')}</button></div>
       </div>`;

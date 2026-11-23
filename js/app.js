@@ -103,6 +103,7 @@ const ACTIONS = {
   'pace-suggestion': () => COACH.openPaceSuggestion(),
   assessment: () => COACH.openAssessmentPicker(),
   'change-history': () => COACH.openHistory(),
+  effort: async (el) => { const { openEffortSheet } = await import('./ui/effort.js'); openEffortSheet(el.dataset.zone, { treadmill: !!document.querySelector('.live .tm-panel') }); },
   'undo-last': async () => { const r = await store.undoLast(); if (!r.ok) toast(r.reason); else COACH.showSummary(r.summary); },
   'prog-range': (el) => { prog.range = Number(el.dataset.range); render(); },
   'add-race': () => openAddRace(),

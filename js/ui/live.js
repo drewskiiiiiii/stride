@@ -11,6 +11,7 @@ import { audio, wake, notify } from '../services/audio-coach.js';
 import { zoneColorKey, stepTarget, typeLabel, speedUnit } from './format.js';
 import { fmtSpeed, fmtSpeedRange, speedLabel, speedWords, speedStatus, speedToPace, SPEED_LIMITS, roundSpeed } from '../engine/treadmill.js';
 import { ZONE_INFO } from '../engine/vdot.js';
+import { startingPace } from '../engine/effort.js';
 import { isRun } from '../engine/workout-utils.js';
 import { offerVdotUpdate } from './actions.js';
 import { showEvaluation } from './coach.js';
@@ -572,10 +573,16 @@ function update() {
     let cls = '';
     if (st.targetPace && cur && S.mode === 'gps') cls = cur > st.targetPace[1] * 1.03 ? 'slow' : cur < st.targetPace[0] * 0.97 ? 'fast' : 'on';
     targetEl.className = `live-target ${cls}`;
-    targetEl.innerHTML = `<span class="tl">Target</span> ${esc(hrTxt || tgt || `RPE ${ZONE_INFO[st.zone]?.rpe || ''}`)}${cls ? ` <span class="tl">${cls === 'slow' ? 'Speed up' : cls === 'fast' ? 'Ease off' : 'On pace'}</span>` : ''}`;
+    const effortOnly = !tgt && !hrTxt && st.zone !== 'walk' && ZONE_INFO[st.zone]?.rpe;
+    const sp = effortOnly ? startingPace(st.zone, plan) : null;
+    targetEl.innerHTML = effortOnly
+      ? `<span class="tl">Effort</span> RPE ${esc(ZONE_INFO[st.zone].rpe)}/10${sp ? ` <span class="tl">start ~${esc(fmtPaceRange(sp.range))}</span>` : ''} ${icon('info', 'xs')}`
+      : `<span class="tl">Target</span> ${esc(hrTxt || tgt || '')}${cls ? ` <span class="tl">${cls === 'slow' ? 'Speed up' : cls === 'fast' ? 'Ease off' : 'On pace'}</span>` : ''}`;
+    if (effortOnly) { targetEl.dataset.action = 'effort'; targetEl.dataset.zone = st.zone; targetEl.style.cursor = 'pointer'; }
+    else { delete targetEl.dataset.action; targetEl.style.cursor = ''; }
     targetEl.hidden = false;
   } else targetEl.hidden = true;
-  $('cue').textContent = st?.cue || (st?.zone ? ZONE_INFO[st.zone]?.effort || '' : '');
+  $('cue').textContent = st?.zone && !st.targetPace && !TM() && st.zone !== 'walk' && ZONE_INFO[st.zone]?.rpe ? `${ZONE_INFO[st.zone].effort}. Tap the effort for what RPE ${ZONE_INFO[st.zone].rpe} means.` : st?.cue || (st?.zone ? ZONE_INFO[st.zone]?.effort || '' : '');
   $('elapsed').textContent = fmtDuration(WS.elapsedMs(S, t) / 1000);
   if (S.supp) $('setsdone').textContent = S.laps.filter((l) => l.kind === 'exercise' && !l.skipped).length;
   else {
@@ -611,7 +618,12 @@ function speakValue(st) {
   return '';
 }
 function stepSpeech(st, prevStep) {
-  const target = st.targetPace ? speakPace(st.targetPace) : st.zone ? (ZONE_INFO[st.zone]?.effort || '') + '.' : '';
+  let target = st.targetPace ? speakPace(st.targetPace) : st.zone ? (ZONE_INFO[st.zone]?.effort || '') + '.' : '';
+  if (!st.targetPace && st.zone && st.zone !== 'walk' && ZONE_INFO[st.zone]?.rpe && !TM()) {
+    const r = ZONE_INFO[st.zone].rpe.split('–');
+    const sp = startingPace(st.zone, store.state.plan);
+    target = `Effort ${r[0]}${r[1] ? ' to ' + r[1] : ''} out of 10. ${ZONE_INFO[st.zone].effort}.${sp ? ` Start around ${speakClock((sp.range[0] + sp.range[1]) / 2)}.` : ''}`;
+  }
   switch (st.kind) {
     case 'warmup': return `Begin your warm-up. ${speakValue(st)} easy. ${target}`;
     case 'cooldown': return `Begin your cooldown. ${speakValue(st)}, nice and easy.`;
@@ -694,7 +706,8 @@ function tmCompare() {
 function speakClock(secPerKm) {
   if (!secPerKm) return '';
   const [m, s2] = fmtPace(secPerKm).split(':');
-  return `${Number(m)} ${s2} per ${paceLabel() === '/mi' ? 'mile' : 'kilometre'}`;
+  const unit = paceLabel() === '/mi' ? 'mile' : 'kilometre';
+  return s2 === '00' ? `${Number(m)} minutes per ${unit}` : `${Number(m)} ${s2} per ${unit}`;
 }
 
 function paceAlert() {

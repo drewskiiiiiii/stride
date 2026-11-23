@@ -6,6 +6,7 @@ import { ZONE_INFO, hrRange, maxHrEstimate } from '../engine/vdot.js';
 import { TYPE_META, flattenSteps, zonePace } from '../engine/workout-utils.js';
 import { prefs } from '../core/storage.js';
 import { stepSpeed, fmtSpeedRange, speedLabel } from '../engine/treadmill.js';
+import { startingPace } from '../engine/effort.js';
 
 /** Treadmill speed unit: user choice, or follows the distance unit. */
 export function speedUnit() {
@@ -52,9 +53,27 @@ export function stepTarget(step, plan, profile, { short = false } = {}) {
   if (step.zone === 'race' && step.targetPace) parts.push(fmtPace(step.targetPace, { withUnit: true }));
   if (byHr && hrText) { parts.push(hrText); if (pr && !short) parts.push(pr); }
   else if (pr) { parts.push(pr); if (hrText && !short && byHr) parts.push(hrText); }
-  if (!pr && !(byHr && hrText)) parts.push(short ? `RPE ${info.rpe}` : `${info.effort || ''} · RPE ${info.rpe}`);
+  if (!pr && !(byHr && hrText)) {
+    parts.push(short ? `RPE ${info.rpe}` : `${info.effort || ''} · RPE ${info.rpe}`);
+    const sp = !short && step.zone !== 'walk' ? startingPace(step.zone, plan) : null;
+    if (sp && sp.basis !== 'zones') parts.push(`start ~${fmtPaceRange(sp.range)}`);
+  }
   if (!short && showSpeeds(plan)) { const sp = stepSpeedText(step, plan); if (sp) parts.push(`Treadmill ${sp}`); }
   return parts.join(' · ');
+}
+
+/** True when a step is prescribed by effort (RPE) rather than a personal pace. */
+export function isEffortBased(step, plan) {
+  if (!step?.zone || step.zone === 'walk' || step.zone === 'race') return false;
+  return !(plan?.paces && plan.paces[step.zone]) && !!ZONE_INFO[step.zone]?.rpe;
+}
+export function mainZone(w, plan) {
+  const flat = flattenSteps(w.steps || []);
+  const core = flat.filter((s) => !['warmup', 'cooldown', 'recover', 'walk', 'rest'].includes(s.kind) && s.zone !== 'stride');
+  const dur = (s) => (s.measure === 'time' ? s.value : (s.value / 1000) * zonePace(s.zone, plan?.paces, plan?.assumedEasy));
+  const totals = {};
+  core.forEach((s) => { totals[s.zone] = (totals[s.zone] || 0) + dur(s); });
+  return Object.keys(totals).sort((a, b) => totals[b] - totals[a])[0] || flat[0]?.zone || null;
 }
 
 export function stepValue(step) {
@@ -89,7 +108,7 @@ export function renderSteps(steps, plan, profile) {
   const one = (s) => `
     <div class="step" data-z="${zoneColorKey(s.zone)}">
       <span class="zbar"></span>
-      <div class="grow"><div class="t">${esc(s.label)}</div>${s.zone || s.detail ? `<div class="s">${esc(s.detail || stepTarget(s, plan, profile))}</div>` : ''}${s.cue && s.kind === 'exercise' ? `<div class="s">${esc(s.cue)}</div>` : ''}</div>
+      <div class="grow"><div class="t">${esc(s.label)}</div>${s.zone || s.detail ? `<div class="s">${esc(s.detail || stepTarget(s, plan, profile))}</div>` : ''}${s.cue && s.kind === 'exercise' ? `<div class="s">${esc(s.cue)}</div>` : ''}${isEffortBased(s, plan) ? `<button class="link-btn tiny" data-action="effort" data-zone="${esc(s.zone)}" style="padding:2px 0">${icon('info', 'xs')} What does RPE ${esc(ZONE_INFO[s.zone]?.rpe || '')} mean?</button>` : ''}</div>
       <div class="v">${esc(stepValue(s))}</div>
     </div>`;
   return `<div class="steps">${(steps || []).map((s) => s.repeat
