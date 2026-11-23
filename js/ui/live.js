@@ -51,7 +51,7 @@ function doResume() {
   wake.acquire();
   const st = WS.currentStep(S); const rem = WS.stepRemaining(S, now());
   const left = rem?.kind === 'time' ? `${Math.ceil(rem.value / 60)} minute${Math.ceil(rem.value / 60) === 1 ? '' : 's'} left` : rem?.kind === 'distance' ? `${Math.round(rem.value)} metres left` : '';
-  audio.say(`Resuming. ${st ? st.label : ''}${left ? ', ' + left : ''}.`);
+  audio.say(`Resuming. ${st ? st.label : ''}${left ? ', ' + left : ''}.`, { cat: 'transitions', prio: 3 });
   persist(true); update();
 }
 async function confirmDiscard() {
@@ -264,6 +264,7 @@ function mount() {
 
 function unmount(clear = true) {
   stopLoop();
+  audio.release(); // hold no audio stream outside workouts (music apps keep full control)
   gps.stop();
   wake.release();
   document.removeEventListener('visibilitychange', onVis);
@@ -291,6 +292,7 @@ function startLoop() {
     if (ev.length) handle(ev);
     paceAlert();
     tmCompare();
+    gpsWatch();
     update();
     persist();
   }, 250);
@@ -348,7 +350,7 @@ function renderReady() {
     wake.acquire();
     const ov = document.createElement('div'); ov.className = 'countdown-overlay'; root.appendChild(ov);
     const total = Number(prefs.get().startCountdown) || 3;
-    if (total >= 10) audio.say('Workout starting in 10 seconds.');
+    if (total >= 10) audio.say('Workout starting in 10 seconds.', { cat: 'transitions', prio: 3 });
     const t0 = now();
     ov.innerHTML = `<div class="center"><div data-cd>${total}</div><div style="font-size:15px;font-weight:700;color:#8c93a0;letter-spacing:.1em">STARTING · TAP TO SKIP</div></div>`;
     let done = false, lastN = total + 1;
@@ -601,45 +603,53 @@ function handle(events, { quietCatchUp = false } = {}) {
   const hidden = document.visibilityState === 'hidden';
   const steps = events.filter((e) => e.type === 'step');
   for (const e of events) {
-    if (e.type === 'start') { audio.beep({ freq: 990, dur: 0.35 }); audio.vibrate([300]); audio.say(TM() ? `${stepSpeech(e.step).split('.')[0]}. ${p.tmSpeakTarget ? tmInstruction(e.step, { first: true }) : ''}` : stepSpeech(e.step)); }
+    if (e.type === 'start') { audio.beep({ freq: 990, dur: 0.35 }); audio.vibrate([300]); audio.say(TM() ? `${stepSpeech(e.step).split('.')[0]}. ${p.tmSpeakTarget ? tmInstruction(e.step, { first: true }) : ''}` : stepSpeech(e.step), { cat: 'transitions', prio: 3 }); }
     if (e.type === 'step' && e === steps[steps.length - 1]) {
       // Only announce the latest step if several were skipped while backgrounded
       audio.beep({ freq: 990, dur: 0.3 }); audio.vibrate([200, 80, 200]);
       const base = stepSpeech(e.step, e.prev);
       const speech = TM() ? `${base.replace(/Increase your pace\.\s*/, '').replace(/Target \d.*?per (mile|kilometre)\./, '').trim()} ${p.tmSpeakTarget ? tmInstruction(e.step) : ''}` : base;
-      audio.say((quietCatchUp && steps.length > 1 ? 'Catching up. ' : '') + speech);
+      audio.say((quietCatchUp && steps.length > 1 ? 'Catching up. ' : '') + speech, { cat: 'transitions', prio: 3 });
+      if (!quietCatchUp && e.step.kind === 'work' && e.step.workTotal > 1 && e.step.workIndex === e.step.workTotal) audio.say('Last one. Finish strong.', { cat: 'motivation', prio: 0 });
       if (hidden && p.stepNotifications) notify.show(e.step.label, stepSpeech(e.step, e.prev));
     }
     const minimal = p.cueLevel === 'minimal';
     if (e.type === 'tmPre' && p.tmReminders && !minimal && !quietCatchUp && e.next?.speed) {
       const n = e.next;
-      audio.say(n.zone === 'stride' ? `Strides begin in ${e.seconds} seconds. Target speed is about ${speedSay(n.speed.target)}.` : n.kind === 'work' ? `Your next interval begins in ${e.seconds} seconds. Target speed is ${speedSay(n.speed.target)}.` : `In ${e.seconds} seconds, ${n.label.toLowerCase()} at ${speedSay(n.speed.target)}.`);
+      audio.say(n.zone === 'stride' ? `Strides begin in ${e.seconds} seconds. Target speed is about ${speedSay(n.speed.target)}.` : n.kind === 'work' ? `Your next interval begins in ${e.seconds} seconds. Target speed is ${speedSay(n.speed.target)}.` : `In ${e.seconds} seconds, ${n.label.toLowerCase()} at ${speedSay(n.speed.target)}.`, { cat: 'transitions', prio: 2 });
     }
     if (e.type === 'tmReminder' && p.tmReminders && !minimal && !quietCatchUp) {
-      audio.say(`You're at ${speedSay(e.selected)}. ${e.selected < e.step.speed.low ? 'Increase' : 'Reduce'} to ${fmtSpeed(e.step.speed.target)} for ${stepNoun(e.step)}.`);
+      audio.say(`You're at ${speedSay(e.selected)}. ${e.selected < e.step.speed.low ? 'Increase' : 'Reduce'} to ${fmtSpeed(e.step.speed.target)} for ${stepNoun(e.step)}.`, { cat: 'pace', prio: 2 });
     }
     const tmPreFired = TM() && (S.fired[String(S.stepIndex)] || []).includes('tm30');
     if (e.type === 'countdown' && p.countdown && !minimal && !quietCatchUp && !tmPreFired) {
       const k = e.next?.kind;
-      audio.say(k === 'work' ? 'Your interval begins in 10 seconds.' : k === 'recover' ? 'Recovery in 10 seconds.' : k === 'cooldown' ? 'Cooldown in 10 seconds.' : e.next ? `${e.next.label} in 10 seconds.` : 'Finishing in 10 seconds.');
+      audio.say(k === 'work' ? 'Your interval begins in 10 seconds.' : k === 'recover' ? 'Recovery in 10 seconds.' : k === 'cooldown' ? 'Cooldown in 10 seconds.' : e.next ? `${e.next.label} in 10 seconds.` : 'Finishing in 10 seconds.', { cat: 'cues', prio: 2 });
     }
     if (e.type === 'beeps' && !quietCatchUp) audio.beep({ freq: 760, dur: 0.12, times: 3, gap: 0.82 });
-    if (e.type === 'halfway' && p.halfway && !minimal) audio.say('Halfway through your workout. Keep it up.');
-    if (e.type === 'stephalf' && p.halfway && !minimal && !quietCatchUp) audio.say(`Halfway through this ${e.step.kind === 'work' ? 'effort' : 'section'}.`);
-    if (e.type === 'distwarn' && p.distanceCues && !minimal && !quietCatchUp) { audio.say(`You have ${e.meters} metres remaining.`); if (e.meters === 100) audio.vibrate([80]); }
+    if (e.type === 'halfway' && p.halfway && !minimal) { audio.say('Halfway through your workout.', { cat: 'cues', prio: 2 }); audio.say('Keep it up — you are doing great.', { cat: 'motivation', prio: 0 }); }
+    if (e.type === 'stephalf' && p.halfway && !minimal && !quietCatchUp) audio.say(`Halfway through this ${e.step.kind === 'work' ? 'effort' : 'section'}.`, { cat: 'cues', prio: 1 });
+    if (e.type === 'distwarn' && p.distanceCues && !minimal && !quietCatchUp) { audio.say(`You have ${e.meters} metres remaining.`, { cat: 'cues', prio: 2 }); if (e.meters === 100) audio.vibrate([80]); }
     if (e.type === 'update' && !quietCatchUp && TM()) {
       const t = now();
-      audio.say(`Speed ${speedSay(S.tm.selected || 0)}. Distance ${toDisplayDist(S.distance).toFixed(1)} ${distLabel() === 'mi' ? 'miles' : 'kilometres'}. About ${toDisplayDist(remainingWorkoutDistance(t)).toFixed(1)} to go.`);
+      audio.say(`Speed ${speedSay(S.tm.selected || 0)}. Distance ${toDisplayDist(S.distance).toFixed(1)} ${distLabel() === 'mi' ? 'miles' : 'kilometres'}. About ${toDisplayDist(remainingWorkoutDistance(t)).toFixed(1)} to go.`, { cat: 'pace', prio: 1 });
     } else if (e.type === 'update' && !quietCatchUp) {
       const t = now(); const el = Math.round(WS.elapsedMs(S, t) / 60000); const avg = WS.averagePace(S, t);
-      audio.say(`Time ${el} minutes.${S.mode === 'gps' && S.distance > 100 ? ` Distance ${toDisplayDist(S.distance).toFixed(1)} ${distLabel() === 'mi' ? 'miles' : 'kilometres'}. Average pace ${speakClock(avg)}.` : ''}`);
+      audio.say(`Time ${el} minutes.${S.mode === 'gps' && S.distance > 100 ? ` Distance ${toDisplayDist(S.distance).toFixed(1)} ${distLabel() === 'mi' ? 'miles' : 'kilometres'}. Average pace ${speakClock(avg)}.` : ''}`, { cat: 'pace', prio: 1 });
     }
     if (e.type === 'finish') {
-      audio.beep({ freq: 1180, dur: 0.25, times: 2 }); audio.vibrate([300, 100, 300]); audio.say('Workout complete. Great job!');
+      audio.beep({ freq: 1180, dur: 0.25, times: 2 }); audio.vibrate([300, 100, 300]); audio.say('Workout complete. Great job!', { cat: 'transitions', prio: 3 });
       stopLoop(); gps.stop(); wake.release(); persist(true);
       setTimeout(mountSummary, 400);
     }
   }
+}
+
+function gpsWatch() {
+  if (!S || S.mode !== 'gps' || S.status !== 'running') return;
+  const bad = S.gpsStatus === 'off' || S.gpsStatus === 'poor';
+  if (bad) { S.gpsBadSince = S.gpsBadSince || now(); if (!S.gpsLostSaid && now() - S.gpsBadSince > 20000) { S.gpsLostSaid = true; audio.say('GPS signal lost. Your time is still being recorded.', { cat: 'safety', prio: 4 }); } }
+  else { if (S.gpsLostSaid) audio.say('GPS signal restored.', { cat: 'cues', prio: 1 }); S.gpsBadSince = null; S.gpsLostSaid = false; }
 }
 
 function tmCompare() {
@@ -649,8 +659,8 @@ function tmCompare() {
   const st = WS.currentStep(S); const p = prefs.get();
   if (!st?.speed || !p.tmCompare || p.cueLevel === 'minimal') return;
   const stat = speedStatus(S.tm.selected, st.speed);
-  if (stat === 'on') audio.say(`${speedSay(S.tm.selected)}. Right on target.`);
-  else if (stat) audio.say(`You're currently running at ${speedSay(S.tm.selected)}. Your target is ${fmtSpeed(st.speed.target)}.`);
+  if (stat === 'on') audio.say(`${speedSay(S.tm.selected)}. Right on target.`, { cat: 'pace', prio: 1 });
+  else if (stat) audio.say(`You're currently running at ${speedSay(S.tm.selected)}. Your target is ${fmtSpeed(st.speed.target)}.`, { cat: 'pace', prio: 2 });
 }
 
 function speakClock(secPerKm) {
@@ -667,8 +677,8 @@ function paceAlert() {
   if (WS.stepElapsedMs(S, now()) < 45000 || now() - lastPaceAlert < 60000) return;
   const cur = WS.currentPace(S, now());
   if (!cur) return;
-  if (cur > st.targetPace[1] * 1.04) { audio.say('Increase your pace.'); lastPaceAlert = now(); }
-  else if (cur < st.targetPace[0] * 0.95) { audio.say('Ease off slightly — you are ahead of target.'); lastPaceAlert = now(); }
+  if (cur > st.targetPace[1] * 1.04) { audio.say('Increase your pace.', { cat: 'pace', prio: 2 }); lastPaceAlert = now(); }
+  else if (cur < st.targetPace[0] * 0.95) { audio.say('Ease off slightly — you are ahead of target.', { cat: 'pace', prio: 2 }); lastPaceAlert = now(); }
 }
 
 // ---------------------------------------------------------------- summary

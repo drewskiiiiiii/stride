@@ -7,6 +7,8 @@ export const DEFAULT_PREFS = {
   distance: 'mi', pace: 'mi', hr: 'bpm', theme: 'dark',
   voice: true, beeps: true, vibration: true, countdown: true, halfway: true, paceAlerts: true,
   voiceRate: 1, volume: 0.9, keepAwake: true, stepNotifications: false, reminderTime: '06:30',
+  spotifyCompat: true, musicMode: 'over',
+  voiceTransitions: true, voiceCues: true, voicePace: true, voiceMotivation: true,
   speedUnit: 'auto', showSpeeds: 'auto', tmDisplay: 'speed',
   tmSpeakTarget: true, tmReminders: true, tmCompare: true, tmPeriodic: false,
   cueLevel: 'standard', updateEvery: 0, startCountdown: 10, distanceCues: true, lastBackupAt: null,

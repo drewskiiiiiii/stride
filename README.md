@@ -18,6 +18,22 @@ A personal running coach that works fully offline after first load: onboarding a
 
 **Local testing:** `python3 -m http.server 8000` in this folder, then open `http://localhost:8000` (localhost counts as a secure context).
 
+## What's new in v2.4 — Spotify & music compatibility
+- **Your music app stays in charge.** Stride never plays media elements, never registers Media Session controls, never requests an exclusive audio session and never talks to Spotify. No login or integration is needed. Where the Audio Session API exists (Safari 16.4+), the page is set to **ambient** so its sounds mix with music. Beep audio is released between cues, and notifications are silent.
+- **Workout controls leave music alone:** pausing, resuming, discarding, moving between screens and recovering an interrupted workout never pause, restart or change the music.
+- **Voice Coach queue:**
+  - Announcements never overlap.
+  - Priority order: safety (e.g. "GPS signal lost"), then interval transitions, then pace corrections and key cues, then updates, then motivation.
+  - Outdated messages are dropped instead of being read late, and pausing clears the queue.
+- **Profile → Music & Voice Coach:**
+  - Music compatibility (on by default) and Voice Coach on/off.
+  - What happens to music during announcements: speak over it, duck it, or pause it. Each option shows whether it is supported, experimental or unavailable on this device.
+  - Announcement frequency, plus separate toggles for interval transitions, workout cues, pace & speed updates and motivational coaching.
+- **Honest limits:**
+  - On iPhone, a web app's speech and beeps only play while it is on screen.
+  - Ducking and pausing rely on the experimental Audio Session API.
+  - On Android, the system decides whether music dips for speech.
+
 ## What's new in v2.3 — Pause, resume and discard
 - **Pause:** the moment you pause, the timer, interval countdowns, distance and voice cues stop, and anything queued to be spoken is cancelled.
   - **GPS:** tracking stops while paused, and any reading taken during the pause is ignored.
@@ -107,7 +123,7 @@ js/engine/  PURE, DOM-free, deterministic — unit-tested in Node
   performance.js       workout evaluation, multi-session trends, per-zone pace offsets, assessments, recovery check-in
 js/services/ workout-session.js (timestamp-based timer state machine) · gps.js · audio-coach.js (speech, beeps, vibration, wake lock, notifications)
 js/ui/      onboarding · preview · today · plan · calendar · dragdrop · progress · profile · live (workout mode) · coach · actions · adjust · charts · insights · format · dom
-tests/run-tests.js   `node tests/run-tests.js` — 68 engine, scheduling, rescheduling, pause/resume, adaptive-coaching, treadmill, timer and data tests
+tests/run-tests.js   `node tests/run-tests.js` — 77 engine, voice-queue, scheduling, rescheduling, pause/resume, adaptive-coaching, treadmill, timer and data tests
 ```
 
 ### How the plan engine works

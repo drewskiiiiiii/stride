@@ -14,7 +14,7 @@ import { bindCharts } from './ui/charts.js';
 import * as A from './ui/actions.js';
 import * as ADJ from './ui/adjust.js';
 import { startLive, resumeLive, checkRecovery, liveDebug } from './ui/live.js';
-import { audio } from './services/audio-coach.js';
+import { audio, applyBaseSession } from './services/audio-coach.js';
 import * as COACH from './ui/coach.js';
 import { initDragDrop } from './ui/dragdrop.js';
 
@@ -106,8 +106,8 @@ const ACTIONS = {
   'undo-last': async () => { const r = await store.undoLast(); if (!r.ok) toast(r.reason); else COACH.showSummary(r.summary); },
   'prog-range': (el) => { prog.range = Number(el.dataset.range); render(); },
   'add-race': () => openAddRace(),
-  'set-pref': (el) => { prefs.set({ [el.dataset.key]: el.dataset.val }); applyPrefs(); render(); },
-  'test-audio': () => { audio.unlock(); audio.beep({ times: 2, force: true }); audio.vibrate([150]); audio.say('Interval 1 of 5. 800 metres. Increase your pace.', { force: true }); },
+  'set-pref': (el) => { prefs.set({ [el.dataset.key]: el.dataset.val }); applyPrefs(); applyBaseSession(); render(); },
+  'test-audio': () => { audio.unlock(); audio.beep({ times: 2, force: true }); audio.vibrate([150]); audio.say('Interval 1 of 5. 800 metres. Increase your pace.', { force: true, cat: 'transitions', prio: 3 }); },
   'export-data': () => exportData(),
   'import-data': () => document.querySelector('[data-import-file]')?.click(),
   'reset-data': () => resetData(),
@@ -148,6 +148,7 @@ store.subscribe(() => { if (!['onboarding', 'edit-profile', 'new-plan', 'live'].
 // ---------- boot ----------
 async function boot() {
   applyPrefs();
+  applyBaseSession(); // mix with Spotify/other music rather than taking over the audio session
   try {
     await store.load();
   } catch (err) {

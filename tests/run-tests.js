@@ -528,5 +528,67 @@ t('next suitable day is offered for an unsafe manual move', () => {
   ok(d && !ws.some((x) => isDemanding(x) && x.id !== 'tue' && Math.abs(diffDays(x.date, d)) <= 1), 'unsafe suggestion ' + d);
 });
 
+// ---- Voice Coach / music coexistence (browser APIs mocked) ----
+console.log('Music & Voice Coach');
+const spoken = []; let cancels = 0; let current = null; const sessionLog = [];
+globalThis.window = globalThis;
+globalThis.matchMedia = () => ({ matches: false });
+const store = {}; globalThis.localStorage = { getItem: (k) => store[k] ?? null, setItem: (k, v) => { store[k] = String(v); }, removeItem: (k) => { delete store[k]; } };
+globalThis.SpeechSynthesisUtterance = class { constructor(t) { this.text = t; } };
+globalThis.speechSynthesis = { speak(u) { spoken.push(u.text); current = u; }, cancel() { cancels++; current = null; }, getVoices: () => [] };
+let sessType = 'auto';
+Object.defineProperty(globalThis, 'navigator', { value: { userAgent: 'iPhone', platform: 'iPhone', maxTouchPoints: 5, audioSession: { get type() { return sessType; }, set type(v) { sessType = v; sessionLog.push(v); } } }, configurable: true });
+const { audio, applyBaseSession, audioCapabilities } = await import('../js/services/audio-coach.js');
+const { prefs: P } = await import('../js/core/storage.js');
+const end = () => { const u = current; current = null; u && u.onend && u.onend(); };
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+t('music-safe default: ambient audio session, never an exclusive type', () => {
+  applyBaseSession();
+  ok(sessType === 'ambient' && !sessionLog.some((x) => ['playback', 'play-and-record'].includes(x)), sessionLog.join());
+});
+t('announcements never overlap; lower priority waits its turn', () => {
+  spoken.length = 0;
+  audio.say('Interval 1 of 5.', { cat: 'transitions', prio: 3 });
+  audio.say('Distance update.', { cat: 'pace', prio: 1 });
+  ok(spoken.length === 1, 'spoke two at once');
+  end(); ok(spoken.length === 2 && spoken[1] === 'Distance update.');
+  end();
+});
+t('higher priority interrupts a lower-priority message', () => {
+  spoken.length = 0; const c0 = cancels;
+  audio.say('Time 10 minutes.', { cat: 'pace', prio: 1 });
+  audio.say('Recovery period begins.', { cat: 'transitions', prio: 3 });
+  ok(cancels === c0 + 1 && spoken.at(-1) === 'Recovery period begins.');
+  end();
+});
+t('motivation is skipped when the coach is busy; disabled categories stay silent', () => {
+  spoken.length = 0;
+  audio.say('Interval 2 of 5.', { cat: 'transitions', prio: 3 });
+  audio.say('Keep it up!', { cat: 'motivation', prio: 0 });
+  end(); ok(spoken.length === 1, 'motivation queued');
+  P.set({ voicePace: false }); audio.say('Increase your pace.', { cat: 'pace', prio: 2 }); ok(spoken.length === 1, 'disabled category spoke');
+  P.set({ voicePace: true });
+});
+await (async () => {
+  spoken.length = 0;
+  audio.say('A', { cat: 'transitions', prio: 3 });
+  audio.say('stale', { cat: 'cues', prio: 2, ttl: 5 });
+  await wait(20); end();
+  t('outdated queued messages are dropped instead of read late', () => ok(!spoken.includes('stale'), spoken.join()));
+  await wait(350);
+  P.set({ musicMode: 'duck' }); sessionLog.length = 0;
+  audio.say('Duck test', { cat: 'transitions', prio: 3 });
+  const during = sessType; end(); await wait(400);
+  t('ducking (when supported) lowers music only during the announcement, then restores', () => ok(during === 'transient' && sessType === 'ambient', `${during} → ${sessType}`));
+  P.set({ musicMode: 'pause' }); audio.say('Pause test', { cat: 'transitions', prio: 3 }); const during2 = sessType; end(); await wait(400);
+  t('pause-music mode uses transient-solo only for the announcement', () => ok(during2 === 'transient-solo' && sessType === 'ambient'));
+  P.set({ musicMode: 'pause' }); audio.say('X', { cat: 'transitions', prio: 3 }); audio.say('Y', { cat: 'cues', prio: 2 }); audio.stop();
+  t('stopping (workout pause/discard) clears the queue and returns to ambient', () => ok(sessType === 'ambient' && !current));
+  P.set({ musicMode: 'over' });
+  const saved = navigator.audioSession; delete navigator.audioSession;
+  t('without the Audio Session API, ducking/pausing are reported unsupported (no false promises)', () => { const c = audioCapabilities(); ok(c.duck === 'no' && c.pause === 'no' && c.over === 'yes'); });
+  navigator.audioSession = saved;
+})();
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
