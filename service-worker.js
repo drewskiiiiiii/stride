@@ -1,6 +1,6 @@
 // Stride service worker — precaches the whole app so it runs fully offline.
 // Bump VERSION whenever any file changes so clients pick up the new cache.
-const VERSION = 'stride-v2.4.0';
+const VERSION = 'stride-v2.4.1';
 const ASSETS = [
   './',
   './index.html',

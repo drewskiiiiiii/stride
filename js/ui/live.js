@@ -54,6 +54,25 @@ function doResume() {
   audio.say(`Resuming. ${st ? st.label : ''}${left ? ', ' + left : ''}.`, { cat: 'transitions', prio: 3 });
   persist(true); update();
 }
+/** One clear place to finish: save, discard, or carry on. Works whether running or paused. */
+function endDialog() {
+  if (!S || !['running', 'paused'].includes(S.status)) return;
+  const pct = Math.round(WS.progress(S, now()) * 100);
+  openSheet(`
+    <div class="sheet-head"><div><div class="small muted">${pct}% of the workout done · ${fmtDuration(WS.elapsedMs(S, now()) / 1000)} active</div><h2>End workout?</h2></div><button class="icon-btn" data-close aria-label="Keep going">${icon('x', 'sm')}</button></div>
+    <div class="stack">
+      <button class="btn primary lg block" data-end="save">${icon('check', 'sm')} Finish & save</button>
+      <button class="btn ghost lg block" data-close>Keep going</button>
+      <div style="height:6px"></div>
+      <button class="btn block" data-end="discard" style="background:transparent;border:1.5px solid color-mix(in srgb, var(--danger) 60%, transparent);color:var(--danger)">${icon('trash', 'sm')} Discard workout</button>
+    </div>`, {
+    onMount: (el, api) => {
+      el.querySelector('[data-end="save"]').onclick = () => { api.close(); if (S && S.status !== 'finished') handle(WS.finish(S, now())); };
+      el.querySelector('[data-end="discard"]').onclick = () => { api.close(); setTimeout(() => confirmDiscard(), 200); };
+    },
+  });
+}
+
 async function confirmDiscard() {
   if (!S) return;
   const wasRunning = S.status === 'running';
@@ -334,7 +353,7 @@ function renderReady() {
       </div>` : ''}
       ${isIOS ? `<div class="notice" style="margin-top:10px">${icon('info', 'sm')}<div>On iPhone, keep the screen on and the app open for voice cues and GPS. If the screen locks, your time stays accurate and the workout catches up when you return.</div></div>` : `<div class="notice" style="margin-top:10px">${icon('info', 'sm')}<div>For best results keep the screen on (${wake.supported ? 'Stride will request this automatically' : 'set your screen timeout longer'}). Timing is always recalculated from timestamps, so it stays correct even if the browser is backgrounded.</div></div>`}
     </div>
-    <button class="btn primary lg block" data-l="go" style="min-height:76px;font-size:20px;border-radius:24px">${icon('play')} Start</button>`;
+    <div class="live-go"><button class="btn primary lg block" data-l="go" style="min-height:72px;font-size:20px;border-radius:24px">${icon('play')} Start</button></div>`;
   root.querySelector('[data-l="close"]').onclick = () => { sessionStore.clear(); unmount(); onExit && onExit(); };
   root.querySelectorAll('[data-mode]').forEach((b) => b.onclick = () => {
     const w2 = store.workout(S.workoutId);
@@ -377,9 +396,18 @@ function gpsLabel() {
   if (S.gpsError) return S.gpsError;
   return { searching: 'Searching for GPS…', good: 'GPS ready', weak: 'GPS signal weak', poor: 'GPS signal poor', off: 'GPS off' }[S.gpsStatus] || '';
 }
+function gpsShort() {
+  if (!S) return '';
+  if (S.gpsError || S.gpsStatus === 'off') return 'GPS off';
+  return { searching: 'GPS…', good: 'GPS', weak: 'GPS weak', poor: 'GPS poor' }[S.gpsStatus] || 'GPS';
+}
 function updateGpsPill() {
   if (!root) return;
-  root.querySelectorAll('[data-gps-pill]').forEach((el) => { el.textContent = gpsLabel(); el.className = `pill ${S.gpsStatus}`; });
+  root.querySelectorAll('[data-gps-pill]').forEach((el) => {
+    const running = !!root.querySelector('[data-u="big"]');
+    el.textContent = running ? gpsShort() : gpsLabel();
+    el.className = `pill ${S.gpsStatus}`;
+  });
 }
 
 // ---------------------------------------------------------------- running screen
@@ -387,8 +415,9 @@ function renderRunning() {
   root.innerHTML = `
     <div class="live-top">
       <span class="ttl">${esc(S.title)}</span>
-      <span class="row" style="gap:6px"><button class="pill voice-pill" data-l="voice" data-u="voice" aria-label="Toggle voice coach"></button>
-      ${S.mode === 'gps' ? `<span class="pill ${S.gpsStatus}" data-gps-pill>${gpsLabel()}</span>` : `<span class="pill off">${S.mode === 'treadmill' ? 'Treadmill' : S.supp ? 'Session' : 'Timer'}</span>`}</span>
+      <span class="row" style="gap:6px;flex:none"><button class="pill voice-pill" data-l="voice" data-u="voice" aria-label="Toggle voice coach"></button>
+      ${S.mode === 'gps' ? `<span class="pill ${S.gpsStatus}" data-gps-pill>${gpsShort()}</span>` : `<span class="pill off">${S.mode === 'treadmill' ? 'Treadmill' : S.supp ? 'Session' : 'Timer'}</span>`}
+      <button class="pill top-end" data-l="end-top" aria-label="End workout">${icon('stop', 'xs')} End</button></span>
     </div>
     <div class="live-seg" data-u="seg"></div>
     <div class="paused-banner" data-u="pausedbanner" hidden><span class="dot"></span> PAUSED <span class="num" data-u="pausednow">0:00</span></div>
@@ -407,6 +436,7 @@ function renderRunning() {
     </div>
     ${S.supp ? '' : '<div class="live-sub-stats" data-u="substats"></div>'}
     <div class="live-next" data-u="next"></div>
+    <div class="live-dock">
     <div class="pause-panel" data-u="pausepanel" hidden>
       <div class="pp-stats">
         <div><div class="v num" data-u="ppactive">0:00</div><div class="l">Active time</div></div>
@@ -428,6 +458,7 @@ function renderRunning() {
       <button data-l="lock">${icon('timer', 'sm')} Lock screen</button>
       <button class="end" data-l="end">${icon('stop', 'sm')} End</button>
     </div>
+    </div>
     <div class="live-warn" data-u="warn"></div>`;
   if (TM()) bindSpeedPanel(root);
   root.querySelector('[data-l="prev"]').onclick = debounced(() => { handle(WS.prev(S, now())); persist(true); update(); });
@@ -441,12 +472,9 @@ function renderRunning() {
   root.querySelector('[data-l="pause2"]').onclick = debounced(() => { if (S.status === 'running') doPause(); else if (S.status === 'paused') doResume(); });
   root.querySelector('[data-l="resume"]').onclick = debounced(doResume);
   root.querySelector('[data-l="voice"]').onclick = () => { const on = !prefs.get().voice; prefs.set({ voice: on }); if (!on) audio.stop(); update(); };
-  const endSave = async () => {
-    const ok = await confirmDialog({ title: 'End workout?', body: `You are ${Math.round(WS.progress(S, now()) * 100)}% through. Your progress so far will be saved.`, confirm: 'End & save', cancel: 'Keep going' });
-    if (ok) { handle(WS.finish(S, now())); }
-  };
-  root.querySelector('[data-l="end"]').onclick = endSave;
-  root.querySelector('[data-l="end2"]').onclick = endSave;
+  root.querySelector('[data-l="end"]').onclick = endDialog;
+  root.querySelector('[data-l="end-top"]').onclick = endDialog;
+  root.querySelector('[data-l="end2"]').onclick = endDialog;
   root.querySelector('[data-l="discard"]').onclick = () => confirmDiscard();
   // "Lock screen" = UI lock to prevent accidental taps in a pocket
   const lockBtn = root.querySelector('[data-l="lock"]');
