@@ -56,21 +56,27 @@ export function setSessionType(type) {
     return true;
   } catch { return false; }
 }
-/**
- * Baseline audio session. 'auto' (browser default) keeps the Voice Coach audible even when an
- * iPhone is on silent; 'ambient' mixes more politely with music but iOS mutes it with the
- * Ring/Silent switch — so it is only used when the user explicitly chooses it.
- */
+/** Baseline audio session between announcements (music-safe). */
 export function applyBaseSession() {
   const p = prefs.get();
-  setSessionType(p.mixAmbient ? 'ambient' : 'auto');
+  // Between announcements Stride plays nothing, so 'ambient' can never interrupt music.
+  setSessionType(p.spotifyCompat === false ? 'auto' : 'ambient');
 }
+/**
+ * Session used while an announcement is spoken. With the browser default ('auto') iOS treats
+ * speech like media playback and PAUSES Spotify without resuming it, so whenever music
+ * compatibility is on we always pick a mixing type:
+ *  • over / duck → 'transient': plays on top of the music (iOS may lower it briefly), and is
+ *    not silenced by the Ring/Silent switch.
+ *  • pause       → 'transient-solo': pauses other audio; the music app decides whether it resumes.
+ *  • quiet mixing (opt-in) → 'ambient': never touches the music, but iOS mutes it on silent.
+ */
 function sessionForAnnouncement() {
   const p = prefs.get();
-  const caps = audioCapabilities();
-  if (p.musicMode === 'duck' && caps.duck === 'experimental') return 'transient';
-  if (p.musicMode === 'pause' && caps.pause === 'experimental') return 'transient-solo';
-  return null; // "over music" (or unsupported) — keep ambient
+  if (!audioCapabilities().session || p.spotifyCompat === false) return null;
+  if (p.musicMode === 'pause') return 'transient-solo';
+  if (p.mixAmbient) return 'ambient';
+  return 'transient';
 }
 
 // ---------------------------------------------------------------- announcement queue
@@ -110,6 +116,7 @@ function speakNow(item, { retry = false } = {}) {
   state.speaking = item;
   const entry = retry ? state.log[state.log.length - 1] : logEntry(item, 'queued');
   const sess = sessionForAnnouncement();
+  const changed = !!sess && currentSession !== sess;
   if (sess) setSessionType(sess);
   const go = () => {
     if (tok !== state.token) return;
@@ -137,7 +144,9 @@ function speakNow(item, { retry = false } = {}) {
   // Never call speak() in the same tick as cancel(): if the engine is busy, clear it and wait briefly.
   let busy = false;
   try { busy = speechSynthesis.speaking || speechSynthesis.pending; } catch { /* ignore */ }
-  if (busy) { try { speechSynthesis.cancel(); } catch { /* ignore */ } setTimeout(go, RESPEAK_DELAY); } else go();
+  if (busy) { try { speechSynthesis.cancel(); } catch { /* ignore */ } setTimeout(go, RESPEAK_DELAY); }
+  else if (changed) setTimeout(go, 60); // let iOS switch to the mixing session before speech starts
+  else go();
   // Some mobile browsers never fire onend — assume it finished after a generous estimate.
   clearTimeout(state.guard);
   state.guard = setTimeout(() => finishCurrent(tok), 3500 + item.text.length * 95 / (p.voiceRate || 1));
@@ -170,6 +179,7 @@ export const audio = {
       // prime speech inside the user's tap — iOS only allows speech after a gesture has spoken once
       try {
         if (speechSynthesis.paused) speechSynthesis.resume();
+        const ps = sessionForAnnouncement(); if (ps && ps !== 'transient-solo') setSessionType(ps);
         const u = new SpeechSynthesisUtterance(' '); u.volume = 0.01; u.rate = 1.5;
         state.primer = u; speechSynthesis.speak(u);
       } catch { /* ignore */ }

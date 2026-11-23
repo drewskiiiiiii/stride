@@ -64,10 +64,10 @@ export function renderProfile() {
       ${tog('spotifyCompat', p.spotifyCompat !== false, 'Spotify & music compatibility', 'Stride never plays media, never takes over device audio and never controls Spotify. Your music app stays in charge.')}
       ${tog('voice', p.voice, 'Voice Coach', c.speech ? 'Spoken coaching during workouts' : 'Speech is not supported in this browser', !c.speech)}
       <button class="setting" data-action="voice-help" style="width:100%;text-align:left;background:none;border:0;color:inherit;cursor:pointer"><div class="grow"><div class="t">Voice troubleshooting</div><div class="s">Can’t hear the coach? Run a check and see what was announced</div></div>${icon('info', 'xs')}</button>
-      <div class="setting" style="flex-wrap:wrap"><div class="grow"><div class="t">During announcements</div><div class="s">${{ over: 'Speak over the music without changing it.', duck: 'Lower the music briefly, then restore it.', pause: 'Pause the music for the announcement, then resume it.' }[p.musicMode] || ''}</div></div>
+      <div class="setting" style="flex-wrap:wrap"><div class="grow"><div class="t">During announcements</div><div class="s">${{ over: 'Speak over the music. Your music keeps playing (iPhone may lower it for a moment).', duck: 'Lower the music briefly, then restore it.', pause: 'Pause the music for each announcement. Spotify may not resume on its own — not recommended.' }[p.musicMode] || ''}</div></div>
         <div class="seg" style="width:100%;margin-top:8px">${modeBtn('over', 'Over music', c.over)}${modeBtn('duck', 'Duck music', c.duck)}${modeBtn('pause', 'Pause music', c.pause)}</div>
         <div class="tiny muted" style="margin-top:6px">On this device — over music: ${lab[c.over]} · ducking: ${lab[c.duck]} · pausing: ${lab[c.pause]}.${c.duck === 'system' ? ' Android usually lowers music for spoken announcements on its own; the app can’t change that.' : ''}${c.session ? ' Ducking and pausing use the browser’s Audio Session API, which behaves inconsistently across iOS versions — try it with your music before relying on it.' : ''}</div></div>
-      ${c.platform === 'ios' && c.session ? tog('mixAmbient', !!p.mixAmbient, 'Quiet mixing mode (iPhone)', 'Blends more politely with music, but iOS then mutes the coach whenever the Ring/Silent switch is on. Leave off unless your phone is never on silent.') : ''}
+      ${c.platform === 'ios' && c.session ? tog('mixAmbient', !!p.mixAmbient, 'Quiet mixing mode (iPhone)', 'Never lowers your music at all, but iOS then mutes the coach whenever the Ring/Silent switch is on. Leave off unless your phone is never on silent.') : ''}
       ${segRow('cueLevel', [['minimal', 'Minimal'], ['standard', 'Standard'], ['detailed', 'Detailed']], p.cueLevel, 'Announcement frequency')}
       <div class="setting" style="padding-top:0"><div class="grow s small muted">${{ minimal: 'Only interval transitions, safety and workout complete.', standard: 'Transitions, 10-second warnings, distance remaining, halfway, pace corrections and a time/distance update every 10 minutes.', detailed: 'Everything in Standard plus time, distance and pace updates at your chosen interval.' }[p.cueLevel]}</div></div>
       ${tog('voiceTransitions', p.voiceTransitions !== false, 'Interval transitions', 'New interval, recovery, warm-up, cool-down, workout start and finish')}
@@ -126,7 +126,7 @@ export function renderProfile() {
         <dt>Installed as app</dt><dd>${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'Yes' : 'No'}</dd>
         <dt>GPS</dt><dd>${gps.supported ? (gps.secure ? 'Available' : 'Needs HTTPS') : 'Unavailable'}</dd>
         <dt>Storage</dt><dd data-di="storage">—</dd>
-        <dt>Version</dt><dd>2.5.1 · data v2</dd>
+        <dt>Version</dt><dd>2.5.2 · data v2</dd>
       </dl>
       ${!(matchMedia('(display-mode: standalone)').matches || navigator.standalone) ? `<div class="notice" style="margin-top:12px">${icon('download', 'sm')}<div><b>Install Stride:</b> on iPhone tap <b>Share → Add to Home Screen</b> in Safari. On Android tap <b>⋮ → Install app</b> in Chrome.${window.__installPrompt ? ' <button class="btn sm" data-action="install">Install now</button>' : ''}</div></div>` : ''}
     </div>

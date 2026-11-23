@@ -559,22 +559,23 @@ const { audio, applyBaseSession, audioCapabilities } = await import('../js/servi
 const { prefs: P } = await import('../js/core/storage.js');
 const end = () => { const u = current; current = null; u && u.onend && u.onend(); };
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
-t('default session stays audible on a silenced iPhone (auto, never an exclusive type)', () => {
+t('between announcements the session is ambient (never interrupts music), never exclusive', () => {
   applyBaseSession();
-  ok(sessType === 'auto' && !sessionLog.some((x) => ['playback', 'play-and-record'].includes(x)), sessionLog.join());
+  ok(sessType === 'ambient' && !sessionLog.some((x) => ['playback', 'play-and-record', 'auto'].includes(x)), sessionLog.join());
 });
-t('ambient mixing is opt-in', () => { P.set({ mixAmbient: true }); applyBaseSession(); ok(sessType === 'ambient'); P.set({ mixAmbient: false }); applyBaseSession(); });
-t('announcements never overlap; lower priority waits its turn', () => {
+await (async () => {
   spoken.length = 0;
   audio.say('Interval 1 of 5.', { cat: 'transitions', prio: 3 });
   audio.say('Distance update.', { cat: 'pace', prio: 1 });
-  ok(spoken.length === 1, 'spoke two at once');
-  end(); ok(spoken.length === 2 && spoken[1] === 'Distance update.');
-  end();
-});
+  await wait(100); const n1 = spoken.length;
+  end(); await wait(100);
+  t('announcements never overlap; lower priority waits its turn', () => ok(n1 === 1 && spoken.length === 2 && spoken[1] === 'Distance update.', spoken.join('|')));
+  end(); await wait(400);
+})();
 await (async () => {
   spoken.length = 0; const c0 = cancels;
   audio.say('Time 10 minutes.', { cat: 'pace', prio: 1 });
+  await wait(100);
   audio.say('Recovery period begins.', { cat: 'transitions', prio: 3 });
   const immediate = spoken.at(-1);
   await wait(250);
@@ -602,13 +603,17 @@ await (async () => {
   await wait(350);
   P.set({ musicMode: 'duck' }); sessionLog.length = 0;
   audio.say('Duck test', { cat: 'transitions', prio: 3 });
-  const during = sessType; end(); await wait(400);
-  t('ducking (when supported) lowers music only during the announcement, then restores', () => ok(during === 'transient' && sessType === 'auto', `${during} → ${sessType}`));
-  P.set({ musicMode: 'pause' }); audio.say('Pause test', { cat: 'transitions', prio: 3 }); const during2 = sessType; end(); await wait(400);
-  t('pause-music mode uses transient-solo only for the announcement', () => ok(during2 === 'transient-solo' && sessType === 'auto'));
+  const during = sessType; await wait(100); end(); await wait(400);
+  t('ducking (when supported) lowers music only during the announcement, then restores', () => ok(during === 'transient' && sessType === 'ambient', `${during} → ${sessType}`));
+  P.set({ musicMode: 'pause' }); audio.say('Pause test', { cat: 'transitions', prio: 3 }); const during2 = sessType; await wait(100); end(); await wait(400);
+  t('pause-music mode uses transient-solo only for the announcement', () => ok(during2 === 'transient-solo' && sessType === 'ambient'));
   P.set({ musicMode: 'pause' }); audio.say('X', { cat: 'transitions', prio: 3 }); audio.say('Y', { cat: 'cues', prio: 2 }); audio.stop();
-  t('stopping (workout pause/discard) clears the queue and restores the base session', () => ok(sessType === 'auto' && !current));
-  P.set({ musicMode: 'over' });
+  t('stopping (workout pause/discard) clears the queue and restores the base session', () => ok(sessType === 'ambient' && !current));
+  P.set({ musicMode: 'over' }); sessionLog.length = 0;
+  audio.say('Over test', { cat: 'transitions', prio: 3 }); const during3 = sessType; await wait(100); end(); await wait(400);
+  t('default "over music" speaks with a mixing session (transient), never the default that pauses Spotify', () => ok(during3 === 'transient' && sessType === 'ambient' && !sessionLog.includes('auto'), `${during3} → ${sessType} ${sessionLog.join()}`));
+  P.set({ mixAmbient: true }); audio.say('Quiet test', { cat: 'transitions', prio: 3 }); const during4 = sessType; await wait(100); end(); await wait(400); P.set({ mixAmbient: false });
+  t('quiet mixing mode speaks as ambient', () => ok(during4 === 'ambient'));
   const saved = navigator.audioSession; delete navigator.audioSession;
   t('without the Audio Session API, ducking/pausing are reported unsupported (no false promises)', () => { const c = audioCapabilities(); ok(c.duck === 'no' && c.pause === 'no' && c.over === 'yes'); });
   navigator.audioSession = saved;
