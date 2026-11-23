@@ -32,8 +32,12 @@ function persist(force = false) {
 
 function applyCuePrefs(s) {
   const p = prefs.get();
-  const periodic = s.mode === 'treadmill' ? p.tmPeriodic : p.cueLevel === 'detailed';
-  s.updateEverySec = periodic && !s.supp ? (p.updateEvery || 5) * 60 : 0;
+  // Standard: an update every 10 min (or the chosen interval if longer) so steady runs are never
+  // silent for long. Detailed: at the chosen interval. Minimal: none.
+  const every = Number(p.updateEvery) || 5;
+  const min = s.mode === 'treadmill' ? (p.tmPeriodic ? every : 0)
+    : p.cueLevel === 'detailed' ? every : p.cueLevel === 'standard' ? Math.max(every, 10) : 0;
+  s.updateEverySec = min && !s.supp ? min * 60 : 0;
 }
 
 // ---------------------------------------------------------------- pause / resume / discard
@@ -421,6 +425,7 @@ function renderRunning() {
       <button class="pill top-end" data-l="end-top" aria-label="End workout">${icon('stop', 'xs')} End</button></span>
     </div>
     <div class="live-seg" data-u="seg"></div>
+    <button class="voice-fix" data-l="voicefix" hidden>${icon('volume', 'xs')} Voice coach can’t play audio — tap to fix</button>
     <div class="paused-banner" data-u="pausedbanner" hidden><span class="dot"></span> PAUSED <span class="num" data-u="pausednow">0:00</span></div>
     <div class="live-phase"><div class="k" data-u="kind"></div><div class="lbl" data-u="label"></div><div class="rep" data-u="rep"></div></div>
     <div class="live-main">
@@ -472,7 +477,21 @@ function renderRunning() {
   });
   root.querySelector('[data-l="pause2"]').onclick = debounced(() => { if (S.status === 'running') doPause(); else if (S.status === 'paused') doResume(); });
   root.querySelector('[data-l="resume"]').onclick = debounced(doResume);
-  root.querySelector('[data-l="voice"]').onclick = () => { const on = !prefs.get().voice; prefs.set({ voice: on }); if (!on) audio.stop(); update(); };
+  root.querySelector('[data-l="voice"]').onclick = () => {
+    const on = !prefs.get().voice; prefs.set({ voice: on });
+    if (!on) { audio.stop(); toast('Voice Coach muted — tap “Voice off” to turn it back on'); }
+    else { audio.unlock(); audio.say('Voice coach on.', { cat: 'transitions', prio: 3, force: true }); }
+    update();
+  };
+  const fix = root.querySelector('[data-l="voicefix"]');
+  if (fix) fix.onclick = () => {
+    if (!prefs.get().voice) prefs.set({ voice: true });
+    audio.unlock(); // re-primes speech inside this tap, which iOS requires after an interruption
+    fix.hidden = true;
+    audio.say('Voice coach is back.', { cat: 'transitions', prio: 3, force: true });
+    update();
+  };
+  audio.onFailure = () => { const b = root?.querySelector('[data-l="voicefix"]'); if (b && prefs.get().voice) b.hidden = false; };
   root.querySelector('[data-l="end"]').onclick = endDialog;
   root.querySelector('[data-l="end-top"]').onclick = endDialog;
   root.querySelector('[data-l="end2"]').onclick = endDialog;

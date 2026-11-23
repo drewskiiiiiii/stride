@@ -57,17 +57,19 @@ export function renderProfile() {
       ${segRow('hr', [['bpm', 'BPM'], ['pct', '% max']], p.hr, 'Heart rate')}
     </div>
 
-    <div class="section-title"><h2>Music & Voice Coach</h2><button class="link-btn" data-action="test-audio">${icon('volume', 'xs')} Test over music</button></div>
+    <div class="section-title"><h2>Music & Voice Coach</h2><button class="link-btn" data-action="test-audio">${icon('volume', 'xs')} Test voice</button></div>
     ${(() => { const c = audioCapabilities(); const lab = { yes: 'Supported', experimental: 'Experimental', system: 'Handled by Android', no: 'Not supported here' };
       const modeBtn = (v, l, st) => `<button data-action="set-pref" data-key="musicMode" data-val="${v}" class="${p.musicMode === v ? 'sel' : ''}" ${st === 'no' ? 'disabled style="opacity:.4"' : ''}>${l}</button>`;
       return `<div class="list">
       ${tog('spotifyCompat', p.spotifyCompat !== false, 'Spotify & music compatibility', 'Stride never plays media, never takes over device audio and never controls Spotify. Your music app stays in charge.')}
       ${tog('voice', p.voice, 'Voice Coach', c.speech ? 'Spoken coaching during workouts' : 'Speech is not supported in this browser', !c.speech)}
+      <button class="setting" data-action="voice-help" style="width:100%;text-align:left;background:none;border:0;color:inherit;cursor:pointer"><div class="grow"><div class="t">Voice troubleshooting</div><div class="s">Can’t hear the coach? Run a check and see what was announced</div></div>${icon('info', 'xs')}</button>
       <div class="setting" style="flex-wrap:wrap"><div class="grow"><div class="t">During announcements</div><div class="s">${{ over: 'Speak over the music without changing it.', duck: 'Lower the music briefly, then restore it.', pause: 'Pause the music for the announcement, then resume it.' }[p.musicMode] || ''}</div></div>
         <div class="seg" style="width:100%;margin-top:8px">${modeBtn('over', 'Over music', c.over)}${modeBtn('duck', 'Duck music', c.duck)}${modeBtn('pause', 'Pause music', c.pause)}</div>
         <div class="tiny muted" style="margin-top:6px">On this device — over music: ${lab[c.over]} · ducking: ${lab[c.duck]} · pausing: ${lab[c.pause]}.${c.duck === 'system' ? ' Android usually lowers music for spoken announcements on its own; the app can’t change that.' : ''}${c.session ? ' Ducking and pausing use the browser’s Audio Session API, which behaves inconsistently across iOS versions — try it with your music before relying on it.' : ''}</div></div>
+      ${c.platform === 'ios' && c.session ? tog('mixAmbient', !!p.mixAmbient, 'Quiet mixing mode (iPhone)', 'Blends more politely with music, but iOS then mutes the coach whenever the Ring/Silent switch is on. Leave off unless your phone is never on silent.') : ''}
       ${segRow('cueLevel', [['minimal', 'Minimal'], ['standard', 'Standard'], ['detailed', 'Detailed']], p.cueLevel, 'Announcement frequency')}
-      <div class="setting" style="padding-top:0"><div class="grow s small muted">${{ minimal: 'Only interval transitions, safety and workout complete.', standard: 'Transitions, 10-second warnings, distance remaining, halfway and pace corrections.', detailed: 'Everything in Standard plus regular time, distance and pace updates.' }[p.cueLevel]}</div></div>
+      <div class="setting" style="padding-top:0"><div class="grow s small muted">${{ minimal: 'Only interval transitions, safety and workout complete.', standard: 'Transitions, 10-second warnings, distance remaining, halfway, pace corrections and a time/distance update every 10 minutes.', detailed: 'Everything in Standard plus time, distance and pace updates at your chosen interval.' }[p.cueLevel]}</div></div>
       ${tog('voiceTransitions', p.voiceTransitions !== false, 'Interval transitions', 'New interval, recovery, warm-up, cool-down, workout start and finish')}
       ${tog('voiceCues', p.voiceCues !== false, 'Workout cues', 'Countdowns, halfway, distance remaining, upcoming intervals')}
       ${tog('voicePace', p.voicePace !== false, 'Pace & speed updates', 'Pace corrections, treadmill speed comparisons, periodic updates')}
@@ -124,7 +126,7 @@ export function renderProfile() {
         <dt>Installed as app</dt><dd>${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'Yes' : 'No'}</dd>
         <dt>GPS</dt><dd>${gps.supported ? (gps.secure ? 'Available' : 'Needs HTTPS') : 'Unavailable'}</dd>
         <dt>Storage</dt><dd data-di="storage">—</dd>
-        <dt>Version</dt><dd>2.5.0 · data v2</dd>
+        <dt>Version</dt><dd>2.5.1 · data v2</dd>
       </dl>
       ${!(matchMedia('(display-mode: standalone)').matches || navigator.standalone) ? `<div class="notice" style="margin-top:12px">${icon('download', 'sm')}<div><b>Install Stride:</b> on iPhone tap <b>Share → Add to Home Screen</b> in Safari. On Android tap <b>⋮ → Install app</b> in Chrome.${window.__installPrompt ? ' <button class="btn sm" data-action="install">Install now</button>' : ''}</div></div>` : ''}
     </div>
@@ -150,7 +152,7 @@ export async function mountProfileInfo(root) {
       if (r !== 'granted') { el.checked = false; toast('Notification permission was not granted'); return; }
     }
     prefs.set({ [k]: el.checked });
-    if (k === 'spotifyCompat') (await import('../services/audio-coach.js')).applyBaseSession();
+    if (k === 'spotifyCompat' || k === 'mixAmbient') (await import('../services/audio-coach.js')).applyBaseSession();
     if (k === 'voice' && !el.checked) audio.stop();
     toast('Saved');
   });

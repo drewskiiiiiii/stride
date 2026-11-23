@@ -56,11 +56,14 @@ export function setSessionType(type) {
     return true;
   } catch { return false; }
 }
-/** Default: mix with other apps. Called at boot and after every announcement. */
+/**
+ * Baseline audio session. 'auto' (browser default) keeps the Voice Coach audible even when an
+ * iPhone is on silent; 'ambient' mixes more politely with music but iOS mutes it with the
+ * Ring/Silent switch — so it is only used when the user explicitly chooses it.
+ */
 export function applyBaseSession() {
   const p = prefs.get();
-  if (p.spotifyCompat !== false) setSessionType('ambient');
-  else setSessionType('auto');
+  setSessionType(p.mixAmbient ? 'ambient' : 'auto');
 }
 function sessionForAnnouncement() {
   const p = prefs.get();
@@ -92,26 +95,58 @@ function finishCurrent(tok) {
   else setTimeout(() => { if (!state.speaking) applyBaseSession(); }, 300); // restore music volume / resume
 }
 
-function speakNow(item) {
+const RESPEAK_DELAY = 180; // WebKit drops an utterance spoken immediately after cancel()
+
+function logEntry(item, status, extra = {}) {
+  const e = { text: item.text, prio: item.prio, cat: item.cat, at: Date.now(), status, ...extra };
+  state.log.push(e);
+  if (state.log.length > 60) state.log.shift();
+  return e;
+}
+
+function speakNow(item, { retry = false } = {}) {
   const p = prefs.get();
   const tok = ++state.token;
   state.speaking = item;
-  state.log.push({ text: item.text, prio: item.prio, cat: item.cat, at: Date.now() });
-  if (state.log.length > 50) state.log.shift();
+  const entry = retry ? state.log[state.log.length - 1] : logEntry(item, 'queued');
   const sess = sessionForAnnouncement();
   if (sess) setSessionType(sess);
-  try {
-    // the browser's own queue must be empty so nothing is ever read late or on top of this
-    if (speechSynthesis.speaking || speechSynthesis.pending) speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(item.text);
-    if (voice) u.voice = voice;
-    u.rate = p.voiceRate || 1; u.volume = p.volume ?? 0.9; u.pitch = 1;
-    u.onend = () => finishCurrent(tok);
-    u.onerror = () => finishCurrent(tok);
-    speechSynthesis.speak(u);
-  } catch { finishCurrent(tok); return; }
+  const go = () => {
+    if (tok !== state.token) return;
+    try {
+      if (speechSynthesis.paused) speechSynthesis.resume(); // iOS can leave speech paused after an interruption
+      const u = new SpeechSynthesisUtterance(item.text);
+      if (voice) u.voice = voice;
+      u.lang = voice?.lang || 'en-US';
+      u.rate = p.voiceRate || 1; u.volume = p.volume ?? 0.9; u.pitch = 1;
+      u.onstart = () => { if (tok === state.token) { entry.status = 'speaking'; state.lastOk = Date.now(); state.failStreak = 0; } };
+      u.onend = () => { if (entry.status === 'speaking' || entry.status === 'sent') entry.status = 'done'; finishCurrent(tok); };
+      u.onerror = (ev) => { entry.status = 'error'; entry.error = ev?.error || 'error'; if (ev?.error !== 'interrupted' && ev?.error !== 'canceled') noteFailure(entry.error); finishCurrent(tok); };
+      state.utterance = u; // keep a reference: some browsers garbage-collect it and never fire onend
+      entry.status = 'sent';
+      speechSynthesis.speak(u);
+      // If speech never actually starts, retry once, then report it so the UI can help the user.
+      clearTimeout(state.startCheck);
+      state.startCheck = setTimeout(() => {
+        if (tok !== state.token || entry.status !== 'sent') return;
+        if (!retry) { try { speechSynthesis.cancel(); } catch { /* ignore */ } entry.status = 'retrying'; setTimeout(() => { if (state.speaking === item) speakNow(item, { retry: true }); }, RESPEAK_DELAY); }
+        else { entry.status = 'failed'; noteFailure('did-not-start'); finishCurrent(tok); }
+      }, 2200);
+    } catch (e) { entry.status = 'error'; entry.error = String(e); noteFailure('exception'); finishCurrent(tok); }
+  };
+  // Never call speak() in the same tick as cancel(): if the engine is busy, clear it and wait briefly.
+  let busy = false;
+  try { busy = speechSynthesis.speaking || speechSynthesis.pending; } catch { /* ignore */ }
+  if (busy) { try { speechSynthesis.cancel(); } catch { /* ignore */ } setTimeout(go, RESPEAK_DELAY); } else go();
   // Some mobile browsers never fire onend — assume it finished after a generous estimate.
-  state.guard = setTimeout(() => finishCurrent(tok), 2500 + item.text.length * 90 / (p.voiceRate || 1));
+  clearTimeout(state.guard);
+  state.guard = setTimeout(() => finishCurrent(tok), 3500 + item.text.length * 95 / (p.voiceRate || 1));
+}
+
+function noteFailure(reason) {
+  state.failStreak = (state.failStreak || 0) + 1;
+  state.lastFail = { reason, at: Date.now() };
+  state.onFailure && state.onFailure(state.lastFail, state.failStreak);
 }
 
 export const audio = {
@@ -131,13 +166,34 @@ export const audio = {
       if (ctx.state === 'suspended') ctx.resume();
       scheduleCtxIdle();
     } catch { /* no web audio */ }
-    if (this.speechSupported && !primed && prefs.get().voice) {
-      // prime speech inside the gesture with a silent, empty utterance
-      try { const u = new SpeechSynthesisUtterance(''); u.volume = 0; speechSynthesis.speak(u); } catch { /* ignore */ }
+    if (this.speechSupported && prefs.get().voice && (!primed || state.failStreak)) {
+      // prime speech inside the user's tap — iOS only allows speech after a gesture has spoken once
+      try {
+        if (speechSynthesis.paused) speechSynthesis.resume();
+        const u = new SpeechSynthesisUtterance(' '); u.volume = 0.01; u.rate = 1.5;
+        state.primer = u; speechSynthesis.speak(u);
+      } catch { /* ignore */ }
       voice = pickVoice();
       primed = true;
+      state.failStreak = 0;
     }
   },
+
+  /** Health report for the troubleshooting panel. */
+  diagnostics() {
+    const caps = audioCapabilities();
+    let voices = 0; try { voices = speechSynthesis.getVoices().length; } catch { /* ignore */ }
+    const p = prefs.get();
+    return {
+      speech: caps.speech, voices, voiceName: voice?.name || null, enabled: !!p.voice,
+      categories: { transitions: p.voiceTransitions !== false, cues: p.voiceCues !== false, pace: p.voicePace !== false, motivation: p.voiceMotivation !== false },
+      cueLevel: p.cueLevel, session: currentSession || 'auto', sessionApi: caps.session, platform: caps.platform, standalone: caps.standalone,
+      failStreak: state.failStreak || 0, lastFail: state.lastFail || null, lastOk: state.lastOk || null,
+      paused: (() => { try { return speechSynthesis.paused; } catch { return false; } })(),
+      log: state.log.slice(-15).reverse(),
+    };
+  },
+  set onFailure(fn) { state.onFailure = fn; },
 
   /**
    * Queue an announcement.
@@ -147,19 +203,20 @@ export const audio = {
   say(text, { cat = 'cues', prio = 2, force = false, ttl } = {}) {
     const p = prefs.get();
     if (!text || !text.trim()) return false;
-    if (!force && (!p.voice || !categoryEnabled(cat))) return false;
-    if (!this.speechSupported) return false;
+    const skip = (why) => { logEntry({ text, prio, cat }, 'skipped', { why }); return false; };
+    if (!force && !p.voice) return skip('Voice Coach is turned off');
+    if (!force && !categoryEnabled(cat)) return skip(`“${cat}” announcements are turned off`);
+    if (!this.speechSupported) return skip('Speech not supported in this browser');
     const item = { text: text.replace(/\s+/g, ' ').trim(), cat, prio, at: Date.now(), ttl: ttl ?? (prio >= 3 ? 15000 : prio === 0 ? 4000 : 8000) };
     if (!state.speaking) { speakNow(item); return true; }
     if (item.prio > state.speaking.prio) {
       // a more important message interrupts (e.g. a new interval starting over a pace update)
-      state.token++; clearTimeout(state.guard);
-      try { speechSynthesis.cancel(); } catch { /* ignore */ }
+      // speakNow() clears the engine and waits briefly before speaking (avoids the cancel→speak drop)
       state.speaking = null;
       speakNow(item);
       return true;
     }
-    if (item.prio === 0) return false; // motivation is skipped when the coach is busy
+    if (item.prio === 0) return skip('Skipped — coach was busy'); // motivation is skipped when the coach is busy
     state.pending = state.pending.filter((i) => i.cat !== item.cat || i.prio > item.prio); // newest of a kind wins
     state.pending.push(item);
     state.pending.sort((a, b) => b.prio - a.prio || a.at - b.at);
@@ -171,7 +228,7 @@ export const audio = {
   stop() {
     state.pending = [];
     state.token++;
-    clearTimeout(state.guard);
+    clearTimeout(state.guard); clearTimeout(state.startCheck);
     state.speaking = null;
     try { if (this.speechSupported) speechSynthesis.cancel(); } catch { /* ignore */ }
     applyBaseSession();
@@ -245,3 +302,15 @@ export const notify = {
     } catch { /* ignore */ }
   },
 };
+
+// iOS/Android can leave the speech engine paused or stuck after a call, Siri, a lock or an app
+// switch. On return, clear any stuck utterance so the next announcement isn't silently queued.
+if (typeof document !== 'undefined' && typeof speechSynthesis !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState !== 'visible') return;
+    try {
+      if (speechSynthesis.paused) speechSynthesis.resume();
+      if (!state.speaking && (speechSynthesis.speaking || speechSynthesis.pending)) speechSynthesis.cancel();
+    } catch { /* ignore */ }
+  });
+}

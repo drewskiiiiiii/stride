@@ -16,6 +16,7 @@ import * as ADJ from './ui/adjust.js';
 import { startLive, resumeLive, checkRecovery, liveDebug } from './ui/live.js';
 import { audio, applyBaseSession } from './services/audio-coach.js';
 import * as COACH from './ui/coach.js';
+import { testVoice } from './ui/voice-help.js';
 import { initDragDrop } from './ui/dragdrop.js';
 
 const app = document.getElementById('app');
@@ -108,7 +109,8 @@ const ACTIONS = {
   'prog-range': (el) => { prog.range = Number(el.dataset.range); render(); },
   'add-race': () => openAddRace(),
   'set-pref': (el) => { prefs.set({ [el.dataset.key]: el.dataset.val }); applyPrefs(); applyBaseSession(); render(); },
-  'test-audio': () => { audio.unlock(); audio.beep({ times: 2, force: true }); audio.vibrate([150]); audio.say('Interval 1 of 5. 800 metres. Increase your pace.', { force: true, cat: 'transitions', prio: 3 }); },
+  'test-audio': () => testVoice(),
+  'voice-help': async () => { const { openVoiceHelp } = await import('./ui/voice-help.js'); openVoiceHelp(); },
   'export-data': () => exportData(),
   'import-data': () => document.querySelector('[data-import-file]')?.click(),
   'reset-data': () => resetData(),
