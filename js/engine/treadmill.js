@@ -68,7 +68,8 @@ export function stepSpeed(step, { paces = null, assumedEasy = 420, unit = 'mph',
   if (high > lim.max) { capped = true; high = lim.max; target = Math.min(target, lim.max); low = Math.min(low, lim.max); }
   if (low < lim.min) low = lim.min;
   const incline = step.zone === 'hill' ? 6 : 1; // 1 % approximates outdoor effort; hills use 6 %
-  return { target, low, high, unit, estimated, incline, capped };
+  // exact = unrounded speed for the prescribed pace, so the UI can explain the 0.1 rounding
+  return { target, low, high, unit, estimated, incline, capped, exact: paceToSpeed(mid, unit), pace: mid };
 }
 
 /** Distance (m) covered from a speed log [{at: elapsedMs, mps}] up to elapsed time endMs. */

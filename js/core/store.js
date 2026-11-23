@@ -278,6 +278,20 @@ export const store = {
     return { suggestion };
   },
 
+  /**
+   * Save corrections to a recorded activity (e.g. edited treadmill interval speeds).
+   * Only the activity record changes: the plan, prescribed paces and workout status are untouched,
+   * and no pace/VDOT suggestion is triggered — corrected data feeds longer-term trends only.
+   */
+  async updateActivity(act) {
+    const i = this.state.activities.findIndex((a) => a.id === act.id);
+    if (i < 0) return { ok: false, reason: 'Activity not found' };
+    await db.put('activities', act);
+    this.state.activities[i] = act;
+    this.emit();
+    return { ok: true };
+  },
+
   async deleteActivity(id) {
     const act = this.state.activities.find((a) => a.id === id);
     await db.delete('activities', id);

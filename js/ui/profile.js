@@ -126,7 +126,7 @@ export function renderProfile() {
         <dt>Installed as app</dt><dd>${matchMedia('(display-mode: standalone)').matches || navigator.standalone ? 'Yes' : 'No'}</dd>
         <dt>GPS</dt><dd>${gps.supported ? (gps.secure ? 'Available' : 'Needs HTTPS') : 'Unavailable'}</dd>
         <dt>Storage</dt><dd data-di="storage">—</dd>
-        <dt>Version</dt><dd>2.5.2 · data v2</dd>
+        <dt>Version</dt><dd>2.6.0 · data v2</dd>
       </dl>
       ${!(matchMedia('(display-mode: standalone)').matches || navigator.standalone) ? `<div class="notice" style="margin-top:12px">${icon('download', 'sm')}<div><b>Install Stride:</b> on iPhone tap <b>Share → Add to Home Screen</b> in Safari. On Android tap <b>⋮ → Install app</b> in Chrome.${window.__installPrompt ? ' <button class="btn sm" data-action="install">Install now</button>' : ''}</div></div>` : ''}
     </div>

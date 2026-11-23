@@ -11,6 +11,7 @@ import { analyzeTrends, effectivePaces, recommendFromCheckin, assessmentDue, eva
 import { validateBackup } from '../js/core/migrate.js';
 import { planReschedule, applyUpdates, nextSuitableDay, isDemanding } from '../js/engine/reschedule.js';
 import { paceToSpeed, speedToPace, roundSpeed, stepSpeed, distanceFromLog, speedStatus, convertSpeed } from '../js/engine/treadmill.js';
+import { withSpeedEdits, originalActivity, currentEdits, recordedSpeed, canEditSpeeds, averageSpeed, distanceAt } from '../js/engine/speed-edit.js';
 
 let pass = 0, fail = 0;
 const t = (name, fn) => { try { fn(); pass++; console.log('  ✓', name); } catch (e) { fail++; console.log('  ✗', name, '\n     ', e.message); } };
@@ -618,6 +619,54 @@ await (async () => {
   t('without the Audio Session API, ducking/pausing are reported unsupported (no false promises)', () => { const c = audioCapabilities(); ok(c.duck === 'no' && c.pause === 'no' && c.over === 'yes'); });
   navigator.audioSession = saved;
 })();
+
+
+console.log('\nTreadmill interval speed editing');
+{
+  const MI = 1609.344, mps = (mph) => (mph * MI) / 3600;
+  const lap = (label, kind, zone, min, mph, tp) => ({ label, kind, zone, duration: min * 60, distance: Math.round(mps(mph) * min * 60), avgPace: (min * 60) / ((mps(mph) * min * 60) / 1000), tmAvgSpeed: mph, speedUnit: 'mph', treadmill: true, targetPace: tp });
+  const tp8 = [8 * 60 / 1.609344 - 3, 8 * 60 / 1.609344 + 3], tp10 = [10 * 60 / 1.609344 - 5, 10 * 60 / 1.609344 + 5];
+  const laps = [lap('Warm-up', 'warmup', 'easy', 10, 6.0, tp10), lap('Interval', 'work', 'interval', 5, 7.5, tp8), lap('Recovery', 'recover', 'easy', 3, 6.0, tp10), lap('Interval', 'work', 'interval', 5, 7.5, tp8), lap('Cool-down', 'cooldown', 'easy', 10, 6.0, tp10)];
+  const dist = laps.reduce((a, l) => a + l.distance, 0), dur = laps.reduce((a, l) => a + l.duration, 0);
+  const act = { id: 'a1', source: 'treadmill', mode: 'treadmill', date: '2026-11-20', duration: dur, distance: dist, avgPace: dur / (dist / 1000), laps, treadmill: { unit: 'mph', speedLog: [], avgSpeed: 6.4 }, fastestLap: null };
+  t('5 min at 7.5 mph = 0.625 miles (Distance = Speed × minutes ÷ 60)', () => ok(Math.abs(distanceAt(7.5, 'mph', 300) / MI - 0.625) < 1e-9));
+  t('treadmill activities are editable; GPS runs are not', () => ok(canEditSpeeds(act) && !canEditSpeeds({ ...act, source: 'live', mode: 'gps', treadmill: undefined })));
+  const e1 = withSpeedEdits(act, { 3: { speed: 7.7, unit: 'mph' } });
+  t('editing one interval changes only that interval’s distance', () => {
+    ok(e1.laps.every((l, i) => i === 3 || (l.distance === laps[i].distance && l.tmAvgSpeed === laps[i].tmAvgSpeed && l.duration === laps[i].duration)), 'other laps changed');
+    ok(Math.abs(e1.laps[3].distance - mps(7.7) * 300) < 1 && e1.laps[3].duration === 300);
+  });
+  t('total distance and average pace update by exactly the edited difference', () => {
+    const d = Math.round(dist + mps(7.7) * 300 - laps[3].distance);
+    ok(Math.abs(e1.distance - d) <= 1, `${e1.distance} vs ${d}`);
+    ok(Math.abs(e1.avgPace - e1.duration / (e1.distance / 1000)) < 1e-6 && e1.duration === dur);
+    ok(e1.treadmill.avgSpeed === averageSpeed(e1, 'mph'));
+  });
+  t('original speeds are kept for comparison and each interval can be reset', () => {
+    ok(e1.laps[3].orig.tmAvgSpeed === 7.5 && recordedSpeed(e1.laps[3], 'mph') === 7.5 && e1.tmEdits.origDistance === dist);
+    const back = withSpeedEdits(e1, {});
+    ok(back.distance === dist && back.laps[3].tmAvgSpeed === 7.5 && !back.laps[3].orig && !back.tmEdits);
+  });
+  t('several intervals edited independently; re-editing later starts from the original record', () => {
+    const e2 = withSpeedEdits(e1, { ...currentEdits(e1), 2: { speed: 5.8, unit: 'mph' }, 4: { speed: 5.5, unit: 'mph' } });
+    ok(e2.laps[3].tmAvgSpeed === 7.7 && e2.laps[2].tmAvgSpeed === 5.8 && e2.laps[4].tmAvgSpeed === 5.5 && e2.laps[0].tmAvgSpeed === 6.0 && e2.laps[1].tmAvgSpeed === 7.5);
+    ok(e2.laps[2].orig.tmAvgSpeed === 6.0 && e2.laps[3].orig.tmAvgSpeed === 7.5 && e2.tmEdits.origDistance === dist);
+    const reset3 = withSpeedEdits(e2, { 2: currentEdits(e2)[2], 4: currentEdits(e2)[4] });
+    ok(reset3.laps[3].tmAvgSpeed === 7.5 && reset3.laps[2].tmAvgSpeed === 5.8);
+    const o = originalActivity(e2).laps; ok(o.every((l, i) => Object.keys(laps[i]).every((k) => l[k] === laps[i][k]) && !l.corrected && !l.orig), 'original not recoverable');
+  });
+  t('edits entered in km/h convert correctly', () => { const k = withSpeedEdits(act, { 1: { speed: 12.4, unit: 'kmh' } }); ok(Math.abs(k.laps[1].distance - (12.4 * 1000 / 3600) * 300) < 1 && recordedSpeed(k.laps[1], 'kmh') === 12.1); });
+  t('setting a lap to its recorded speed is not an edit', () => { const n = withSpeedEdits(act, { 1: { speed: 7.5, unit: 'mph' } }); ok(!n.tmEdits && n.distance === dist); });
+  t('prescribed target paces are never changed by edits', () => ok(e1.laps.every((l, i) => l.targetPace === laps[i].targetPace)));
+  t('corrected laps feed treadmill trends (not GPS) — and one workout alone never suggests new paces', () => {
+    const slow = withSpeedEdits(act, { 1: { speed: 6.6, unit: 'mph' }, 3: { speed: 6.6, unit: 'mph' } });
+    const r = analyzeTrends({ activities: [slow], workouts: [], plan: { vdot: 45, paces: trainingPaces(45) }, today: '2026-12-01' });
+    ok(!r.suggestion, 'suggested after one workout');
+    ok(slow.laps[1].corrected && !slow.laps[1].estimated, 'corrected lap excluded from trends');
+  });
+  const st = stepSpeed({ kind: 'work', zone: 'interval', targetPace: tp8 }, { unit: 'mph' });
+  t('recommended speed keeps the exact (unrounded) value for the prescribed pace', () => ok(Math.abs(st.exact - 7.5) < 0.05 && st.target === 7.5 && st.pace));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

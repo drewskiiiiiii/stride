@@ -383,6 +383,8 @@ body:has(.sheet.show) .toast-wrap, body:has(.live) .toast-wrap { bottom: auto; t
 /* dialogs opened during a live workout must sit above the workout screen */
 body:has(.live) .backdrop { z-index: 95; }
 body:has(.live) .sheet { z-index: 96; }
+body:has(.live-summary) .backdrop { z-index: 95; }
+body:has(.live-summary) .sheet { z-index: 96; }
 
 .rpe-bar { display: grid; grid-template-columns: repeat(10, 1fr); gap: 3px; margin-top: 14px; }
 .rpe-bar span { text-align: center; padding: 8px 0; border-radius: 8px; background: var(--surface-2); font-weight: 750; font-size: 13px; color: var(--muted); }

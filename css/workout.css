@@ -145,3 +145,22 @@
 .voice-fix { display: flex; align-items: center; justify-content: center; gap: 8px; width: calc(100% - 32px); margin: 6px 16px 0; padding: 10px 12px; border: 0; border-radius: 12px; background: #f5a524; color: #1a1200; font-weight: 800; font-size: 14px; cursor: pointer; }
 .voice-fix[hidden] { display: none; }
 .voice-pill.off { background: rgba(255,90,90,.18); color: #ff8a8a; }
+/* Edit interval speeds */
+.se-list { display: flex; flex-direction: column; gap: 10px; margin: 12px 0; }
+.se-row { border: 1px solid var(--line); border-radius: 14px; padding: 12px; background: var(--surface, transparent); }
+.se-row.changed { border-color: var(--accent, #c6ff3a); }
+.se-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 8px; margin-bottom: 8px; }
+.se-t { font-weight: 750; }
+.se-grid { display: grid; grid-template-columns: 1fr 1fr 1.25fr; gap: 8px; align-items: end; }
+.se-grid .k { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; font-weight: 700; display: block; margin-bottom: 3px; }
+.se-grid .v { font-weight: 650; font-variant-numeric: tabular-nums; font-size: 14px; }
+.se-in .input { width: 100%; min-width: 0; padding: 8px 10px; font-size: 17px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.se-calc { margin-top: 8px; color: var(--text-2); }
+.se-foot { position: sticky; bottom: calc(-1 * var(--safe-b, 0px)); background: var(--bg); padding: 10px 0 calc(6px + var(--safe-b, 0px)); }
+.tm-rec-note { font-size: 12.5px; color: #8c93a0; margin-top: 6px; text-align: center; }
+.tm-prompt { display: flex; flex-direction: column; gap: 8px; margin: 8px 16px 0; padding: 12px; border-radius: 14px; background: rgba(198,255,58,.12); border: 1px solid rgba(198,255,58,.45); color: #fff; }
+.tm-prompt[hidden] { display: none; }
+.tm-prompt .row { gap: 8px; }
+.tm-prompt button { flex: 1; padding: 10px; border-radius: 10px; border: 0; font-weight: 800; font-size: 14px; cursor: pointer; }
+.tm-prompt .yes { background: var(--accent, #c6ff3a); color: #111; }
+.tm-prompt .no { background: rgba(255,255,255,.12); color: #fff; }
